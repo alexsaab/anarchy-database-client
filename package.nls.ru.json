@@ -5,7 +5,10 @@
   "command.editConnection": "Редактировать подключение",
   "command.refreshTree": "Обновить",
   "command.deleteConnection": "Удалить подключение",
-  "command.openTable": "Открыть таблицу",
+  "command.openTable": "Открыть таблицу (Просмотр)",
   "command.newQuery": "Новая SQL-консоль",
-  "command.runQuery": "Выполнить SQL-запрос"
+  "command.runQuery": "Выполнить SQL-запрос",
+  "command.copyTableName": "Копировать имя таблицы",
+  "command.copyColumnName": "Копировать имя колонки",
+  "command.showTableDdl": "Показать DDL таблицы (CREATE TABLE)"
 }

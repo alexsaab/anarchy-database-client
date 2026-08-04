@@ -4,6 +4,7 @@ import { MysqlDriver } from './MysqlDriver.js';
 import { SqliteDriver } from './SqliteDriver.js';
 import { RedisDriver } from './RedisDriver.js';
 import { MongoDriver } from './MongoDriver.js';
+import { ElasticsearchDriver } from './ElasticsearchDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { SshTunnelManager, SshTunnelResult } from '../ssh/SshTunnelManager.js';
 
@@ -53,6 +54,9 @@ export class DriverManager {
           break;
         case 'MongoDB':
           driver = new MongoDriver(finalConfig, password);
+          break;
+        case 'Elasticsearch':
+          driver = new ElasticsearchDriver(finalConfig, password);
           break;
         default:
           throw new Error(`Unsupported database type: ${config.type}`);

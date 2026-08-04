@@ -5,7 +5,10 @@
   "command.editConnection": "Edit Connection",
   "command.refreshTree": "Refresh",
   "command.deleteConnection": "Delete Connection",
-  "command.openTable": "Open Table",
+  "command.openTable": "Open Table (View Data)",
   "command.newQuery": "New Query Console",
-  "command.runQuery": "Run SQL Query"
+  "command.runQuery": "Run SQL Query",
+  "command.copyTableName": "Copy Table Name",
+  "command.copyColumnName": "Copy Column Name",
+  "command.showTableDdl": "Show Table DDL (CREATE TABLE)"
 }

@@ -13,68 +13,72 @@
 - 📁 **SQLite**: Просмотр локальных файлов баз данных (`.db`, `.sqlite`, `.sqlite3`).
 - 🔴 **Redis**: Просмотр ключей, типов данных (`string`, `hash`, `list`, `set`), значений и времени жизни `TTL`.
 - 🍃 **MongoDB**: Работа с коллекциями и BSON/JSON документами.
+- 🔎 **Elasticsearch**: Подключение к кластерам Elasticsearch, просмотр индексов, маппингов (`mappings`) и документов.
 - 🔒 **SSH-Туннелирование**: Защищенное подключение к базами за файрволом с поддержкой парольной авторизации и SSH-ключей (`id_rsa`, `id_ed25519`).
 - 📂 **Группировка и Проекты**: Объединение подключений в виртуальные папки-проекты (например, `Production`, `Staging`, `Local`).
 - 🎨 **Цветовые метки (Color Badges)**: Визуальное выделение подключений яркими цветными иконками (Красный для Прода, Зеленый для Локала и т.д.).
 - 📤 **Экспорт данных**: Быстрый экспорт таблиц и результатов запросов в **CSV**, **JSON** и **SQL INSERT** скрипты.
 - ⚡ **SQL Консоль и IntelliSense**: Встроенный редактор запросов с подсветкой и автодополнением ключей SQL (`Ctrl+Enter` для запуска).
-- 🌐 **Мультиязычность (i18n)**: Автоматическая локализация на **Русский** и **Английский** языки в зависимости от языка интерфейса VS Code.
+- 🌐 **Мультиязычность (i18n)**: Динамическое переключение на **Русский** или **Английский** язык в зависимости от языка интерфейса VS Code.
 
 ---
 
-## 🚀 Установка
+## 🚀 Пошаговая инструкция по установке
 
-### Вариант 1: Установка из `.vsix` файла (На любую машину)
+### Способ 1: Установка готового `.vsix` файла (Для пользователей)
 
-1. Скачайте файл `anarchy-database-client-0.2.3.vsix` из раздела [Releases](https://github.com/alexsaab/anarchy-database-client/releases).
-2. В VS Code откройте панель расширений (`Ctrl+Shift+X` или `Cmd+Shift+X`).
-3. Нажмите на меню с тремя точками (`...`) в правом верхнем углу панели расширений.
-4. Выберите **Установить из VSIX...** (**Install from VSIX...**) и укажите скачанный файл.
+#### Через Графический Интерфейс VS Code:
+1. Скачайте файл `anarchy-database-client-0.3.0.vsix` из раздела [Releases](https://github.com/alexsaab/anarchy-database-client/releases).
+2. В VS Code откройте панель **Расширения** (`Ctrl + Shift + X` на Windows/Linux или `Cmd + Shift + X` на macOS).
+3. Нажмите на значок **Троеточие (`...`)** в правом верхнем углу панели расширений.
+4. Выберите пункт **Установить из VSIX...** (**Install from VSIX...**).
+5. Укажите скачанный файл `anarchy-database-client-0.3.0.vsix` и нажмите **Установить**.
 
-Или выполните команду в терминале:
+#### Через Командную Строку / Терминал:
 ```bash
-code --install-extension anarchy-database-client-0.2.3.vsix
+code --install-extension anarchy-database-client-0.3.0.vsix
 ```
 
 ---
 
-## 🛠 Запуск из исходного кода и сборка `.vsix`
+### Способ 2: Запуск и сборка из Исходного Кода (Для разработчиков)
 
-Если вы хотите собрать расширение самостоятельно:
+Если вы хотите вносить изменения в код расширения или собрать его самостоятельно:
 
+#### 1. Клонирование и подготовка:
 ```bash
-# 1. Клонируйте репозиторий
+# Клонируйте ваш репозиторий
 git clone https://github.com/alexsaab/anarchy-database-client.git
 cd anarchy-database-client
 
-# 2. Установите зависимости
+# Установите зависимые библиотеки
 npm install
 
-# 3. Соберите проект
+# Соберите проект
 npm run build
-
-# 4. Упакуйте в .vsix файл для распространения
-npx @vscode/vsce package
 ```
 
-После выполнения `npx @vscode/vsce package` в корневой папке появится готовый установочный файл `anarchy-database-client-0.2.3.vsix`.
+#### 2. Запуск в режиме отладки (Debug Mode):
+* Откройте папку `anarchy-database-client` в VS Code.
+* Нажмите клавишу **`F5`** на клавиатуре.
+* Откроется новое окно VS Code (*Extension Development Host*) с запущенным расширением.
+
+#### 3. Упаковка в установочный `.vsix` пакет:
+```bash
+npx @vscode/vsce package
+```
+После завершения команды в корне проекта появится новый файл `anarchy-database-client-0.3.0.vsix`.
 
 ---
 
-## 📤 Инструкция по публикации на GitHub
+## 📤 Инструкция по обновлению и публикации на GitHub
 
-Для публикации вашего проекта в репозитории [github.com/alexsaab](https://github.com/alexsaab/):
-
-1. **Создайте новый публичный репозиторий** на GitHub с именем `anarchy-database-client`.
-2. В терминале вашего проекта выполните:
+Для отправки изменений в ваш репозиторий [github.com/alexsaab/anarchy-database-client](https://github.com/alexsaab/anarchy-database-client):
 
 ```bash
-git init
 git add .
-git commit -m "feat: Initial release of Anarchy Database Client v0.2.3"
-git branch -M main
-git remote add origin https://github.com/alexsaab/anarchy-database-client.git
-git push -u origin main
+git commit -m "feat: Add Elasticsearch support and update installation guide"
+git push origin main
 ```
 
 ---

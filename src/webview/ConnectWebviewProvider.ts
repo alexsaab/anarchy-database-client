@@ -254,6 +254,7 @@ export class ConnectWebviewProvider {
       <option value="SQLite">SQLite</option>
       <option value="Redis">Redis</option>
       <option value="MongoDB">MongoDB</option>
+      <option value="Elasticsearch">Elasticsearch</option>
     </select>
   </div>
 
@@ -396,6 +397,7 @@ export class ConnectWebviewProvider {
           if (type === 'MySQL') portInput.value = 3306;
           if (type === 'Redis') portInput.value = 6379;
           if (type === 'MongoDB') portInput.value = 27017;
+          if (type === 'Elasticsearch') portInput.value = 9200;
         }
       }
     }

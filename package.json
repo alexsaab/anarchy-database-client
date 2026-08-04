@@ -1,9 +1,9 @@
 {
-  "name": "anarchy-database-client",
+  "name": "vscode-database-client-clone",
   "displayName": "Anarchy Database Client",
   "description": "Полнофункциональный клиент баз данных для VS Code (клон cweijan.vscode-database-client2)",
-  "version": "0.2.3",
-  "publisher": "alexsaab",
+  "version": "0.3.2",
+  "publisher": "custom-developer",
   "repository": {
     "type": "git",
     "url": "https://github.com/alexsaab/anarchy-database-client.git"
@@ -60,7 +60,8 @@
       },
       {
         "command": "dbClient.openTable",
-        "title": "%command.openTable%"
+        "title": "%command.openTable%",
+        "icon": "$(table)"
       },
       {
         "command": "dbClient.newQuery",
@@ -70,6 +71,21 @@
       {
         "command": "dbClient.runQuery",
         "title": "%command.runQuery%"
+      },
+      {
+        "command": "dbClient.copyTableName",
+        "title": "%command.copyTableName%",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "dbClient.copyColumnName",
+        "title": "%command.copyColumnName%",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "dbClient.showTableDdl",
+        "title": "%command.showTableDdl%",
+        "icon": "$(code)"
       }
     ],
     "menus": {
@@ -87,9 +103,41 @@
       ],
       "view/item/context": [
         {
+          "command": "dbClient.openTable",
+          "when": "view == database-client-explorer && viewItem == tableNode",
+          "group": "inline@1"
+        },
+        {
+          "command": "dbClient.openTable",
+          "when": "view == database-client-explorer && viewItem == tableNode",
+          "group": "1_navigation@1"
+        },
+        {
+          "command": "dbClient.showTableDdl",
+          "when": "view == database-client-explorer && viewItem == tableNode",
+          "group": "1_navigation@2"
+        },
+        {
+          "command": "dbClient.newQuery",
+          "when": "view == database-client-explorer && viewItem == tableNode",
+          "group": "1_navigation@3"
+        },
+        {
+          "command": "dbClient.copyTableName",
+          "when": "view == database-client-explorer && viewItem == tableNode",
+          "group": "2_copy@1"
+        },
+
+        {
+          "command": "dbClient.copyColumnName",
+          "when": "view == database-client-explorer && viewItem == columnNode",
+          "group": "2_copy@1"
+        },
+
+        {
           "command": "dbClient.editConnection",
           "when": "view == database-client-explorer && viewItem == connectionNode",
-          "group": "inline"
+          "group": "inline@1"
         },
         {
           "command": "dbClient.editConnection",
@@ -97,24 +145,24 @@
           "group": "1_modification@1"
         },
         {
-          "command": "dbClient.deleteConnection",
-          "when": "view == database-client-explorer && viewItem == connectionNode",
-          "group": "inline"
-        },
-        {
-          "command": "dbClient.deleteConnection",
-          "when": "view == database-client-explorer && viewItem == connectionNode",
-          "group": "1_modification@2"
+          "command": "dbClient.newQuery",
+          "when": "view == database-client-explorer && (viewItem == connectionNode || viewItem == databaseNode)",
+          "group": "inline@2"
         },
         {
           "command": "dbClient.newQuery",
           "when": "view == database-client-explorer && (viewItem == connectionNode || viewItem == databaseNode)",
-          "group": "inline"
+          "group": "1_modification@2"
         },
         {
-          "command": "dbClient.openTable",
-          "when": "view == database-client-explorer && viewItem == tableNode",
-          "group": "inline"
+          "command": "dbClient.deleteConnection",
+          "when": "view == database-client-explorer && viewItem == connectionNode",
+          "group": "inline@3"
+        },
+        {
+          "command": "dbClient.deleteConnection",
+          "when": "view == database-client-explorer && viewItem == connectionNode",
+          "group": "1_modification@3"
         }
       ],
       "editor/context": [
@@ -156,6 +204,7 @@
     "ioredis": "^5.3.2",
     "@types/mongodb": "^4.0.7",
     "mongodb": "^6.3.0",
+    "@elastic/elasticsearch": "^8.12.0",
     "ssh2": "^1.15.0",
     "@types/ssh2": "^1.11.13"
   }

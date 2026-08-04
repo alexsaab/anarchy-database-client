@@ -3,6 +3,7 @@ import { ConnectionStorageService } from './storage/ConnectionStorage.js';
 import { DatabaseTreeProvider } from './tree/DatabaseTreeProvider.js';
 import { ConnectionNode } from './tree/ConnectionNode.js';
 import { TableNode } from './tree/TableNode.js';
+import { ColumnNode } from './tree/ColumnNode.js';
 import { DatabaseNode } from './tree/DatabaseNode.js';
 import { ConnectWebviewProvider } from './webview/ConnectWebviewProvider.js';
 import { TableWebviewProvider } from './webview/TableWebviewProvider.js';
@@ -75,6 +76,51 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('dbClient.openTable', (node: TableNode) => {
       if (node && node instanceof TableNode) {
         TableWebviewProvider.openTable(node);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.copyTableName', (node: TableNode) => {
+      if (node && node.table) {
+        vscode.env.clipboard.writeText(node.table.name);
+        vscode.window.showInformationMessage(
+          t(`Copied table name "${node.table.name}"`, `Имя таблицы "${node.table.name}" скопировано`)
+        );
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.copyColumnName', (node: ColumnNode) => {
+      if (node && node.column) {
+        vscode.env.clipboard.writeText(node.column.name);
+        vscode.window.showInformationMessage(
+          t(`Copied column name "${node.column.name}"`, `Имя колонки "${node.column.name}" скопировано`)
+        );
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.showTableDdl', async (node: TableNode) => {
+      if (node && node.table) {
+        try {
+          const driver = await DriverManager.getInstance().getDriver(node.connectionConfig, node.password, node.sshPassword);
+          const columns = await driver.getColumns(node.table.name, node.connectionConfig.database, node.table.schema);
+
+          let ddl = `-- DDL for table ${node.table.name}\nCREATE TABLE "${node.table.name}" (\n`;
+          const colDefs = columns.map(
+            (c) => `  "${c.name}" ${c.type}${c.isPrimaryKey ? ' PRIMARY KEY' : ''}${c.nullable ? '' : ' NOT NULL'}${c.defaultValue ? ` DEFAULT ${c.defaultValue}` : ''}`
+          );
+          ddl += colDefs.join(',\n');
+          ddl += '\n);';
+
+          const doc = await vscode.workspace.openTextDocument({ language: 'sql', content: ddl });
+          await vscode.window.showTextDocument(doc);
+        } catch (e: any) {
+          vscode.window.showErrorMessage(`Failed to generate DDL: ${e.message}`);
+        }
       }
     })
   );
