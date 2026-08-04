@@ -57,7 +57,6 @@ export class ErdWebviewProvider {
     const tablesJson = JSON.stringify(tables);
     const relationsJson = JSON.stringify(relations);
 
-    // Build Mermaid syntax
     let mermaidCode = 'erDiagram\n';
     tables.forEach((t) => {
       mermaidCode += `    "${t.name}" {\n`;
@@ -85,7 +84,7 @@ export class ErdWebviewProvider {
       background-color: var(--vscode-editor-background);
       margin: 0;
       padding: 20px;
-      overflow: auto;
+      position: relative;
     }
     .header {
       display: flex;
@@ -102,10 +101,21 @@ export class ErdWebviewProvider {
       cursor: pointer;
       font-weight: bold;
     }
+    #svgCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
     .diagram-grid {
       display: flex;
       flex-wrap: wrap;
-      gap: 25px;
+      gap: 50px;
+      position: relative;
+      z-index: 20;
     }
     .erd-table {
       background: var(--vscode-sideBar-background, #252526);
@@ -144,8 +154,10 @@ export class ErdWebviewProvider {
   </style>
 </head>
 <body>
+  <svg id="svgCanvas"></svg>
+
   <div class="header">
-    <h2>📊 ${ru ? 'Схема Связей (ER Diagram)' : 'Entity-Relationship Diagram'}: ${databaseName}</h2>
+    <h2>📊 ${ru ? 'Схема Связей с Стрелками (ER Diagram)' : 'Entity-Relationship Diagram'}: ${databaseName}</h2>
     <button id="copyMermaidBtn">📋 ${ru ? 'Копировать Mermaid Код' : 'Copy Mermaid Code'}</button>
   </div>
 
@@ -166,6 +178,7 @@ export class ErdWebviewProvider {
     tables.forEach(tbl => {
       const tableDiv = document.createElement('div');
       tableDiv.className = 'erd-table';
+      tableDiv.id = 'table_' + tbl.name;
 
       let rowsHtml = tbl.columns.map(col => {
         const isPk = col.isPrimaryKey;
@@ -185,6 +198,50 @@ export class ErdWebviewProvider {
       tableDiv.innerHTML = \`<div class="table-header">📁 \${tbl.name}</div><div class="table-body">\${rowsHtml}</div>\${relsHtml ? '<div style="padding:8px;">' + relsHtml + '</div>' : ''}\`;
       grid.appendChild(tableDiv);
     });
+
+    function drawConnections() {
+      const svg = document.getElementById('svgCanvas');
+      svg.style.width = Math.max(document.body.scrollWidth, window.innerWidth) + 'px';
+      svg.style.height = Math.max(document.body.scrollHeight, window.innerHeight) + 'px';
+
+      svg.innerHTML = \`
+        <defs>
+          <marker id="arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#a5b4fc"/>
+          </marker>
+        </defs>
+      \`;
+
+      relations.forEach(rel => {
+        const fromEl = document.getElementById('table_' + rel.fromTable);
+        const toEl = document.getElementById('table_' + rel.toTable);
+
+        if (fromEl && toEl) {
+          const rect1 = fromEl.getBoundingClientRect();
+          const rect2 = toEl.getBoundingClientRect();
+
+          const x1 = rect1.left + rect1.width / 2 + window.scrollX;
+          const y1 = rect1.top + rect1.height / 2 + window.scrollY;
+          const x2 = rect2.left + rect2.width / 2 + window.scrollX;
+          const y2 = rect2.top + rect2.height / 2 + window.scrollY;
+
+          const dx = (x2 - x1) / 2;
+          const d = \`M \${x1} \${y1} C \${x1 + dx} \${y1}, \${x2 - dx} \${y2}, \${x2} \${y2}\`;
+
+          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          path.setAttribute('d', d);
+          path.setAttribute('stroke', '#818cf8');
+          path.setAttribute('stroke-width', '2.5');
+          path.setAttribute('fill', 'none');
+          path.setAttribute('stroke-dasharray', '5,5');
+          path.setAttribute('marker-end', 'url(#arrowhead)');
+          svg.appendChild(path);
+        }
+      });
+    }
+
+    setTimeout(drawConnections, 300);
+    window.onresize = drawConnections;
   </script>
 </body>
 </html>`;
