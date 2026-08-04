@@ -9,10 +9,14 @@ import { ConnectWebviewProvider } from './webview/ConnectWebviewProvider.js';
 import { TableWebviewProvider } from './webview/TableWebviewProvider.js';
 import { SqlCompletionProvider } from './provider/SqlCompletionProvider.js';
 import { DriverManager } from './drivers/DriverManager.js';
+import { IconHelper } from './util/IconHelper.js';
 import { t } from './util/i18n.js';
 
 export function activate(context: vscode.ExtensionContext) {
   console.log('Anarchy Database Client extension activated!');
+
+  // Initialize IconHelper with extension path for SVG icon resolution
+  IconHelper.setExtensionPath(context.extensionPath);
 
   const storageService = new ConnectionStorageService(context);
   const treeProvider = new DatabaseTreeProvider(storageService);
@@ -136,24 +140,6 @@ export function activate(context: vscode.ExtensionContext) {
         const doc = await vscode.workspace.openTextDocument({ language: 'sql', content: sqlComment });
         await vscode.window.showTextDocument(doc);
       }
-    })
-  );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand('dbClient.runQuery', async () => {
-      const editor = vscode.window.activeTextEditor;
-      if (!editor) {
-        return;
-      }
-      const selection = editor.selection;
-      const sql = selection.isEmpty ? editor.document.getText() : editor.document.getText(selection);
-      if (!sql.trim()) {
-        vscode.window.showWarningMessage(t('No SQL query to execute.', 'Нет SQL-запроса для выполнения.'));
-        return;
-      }
-
-      const execMsg = t('Executing SQL Query:\n', 'Выполнение SQL-запроса:\n');
-      vscode.window.showInformationMessage(`${execMsg}${sql.slice(0, 100)}...`);
     })
   );
 

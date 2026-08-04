@@ -3,12 +3,18 @@ import * as vscode from 'vscode';
 import { DatabaseType } from '../model/ConnectionConfig.js';
 
 export class IconHelper {
-  private static getResourcePath(relativePath: string): vscode.Uri {
-    // __dirname in out/util points to /out/util, so 2 levels up gets extension root
-    return vscode.Uri.file(path.join(__dirname, '../../resources', relativePath));
+  private static extensionPath: string = '';
+
+  public static setExtensionPath(extPath: string) {
+    IconHelper.extensionPath = extPath;
   }
 
-  public static getConnectionIcon(type: DatabaseType, isConnected: boolean = false): vscode.Uri | vscode.ThemeIcon {
+  private static getResourcePath(relativePath: string): vscode.Uri {
+    const basePath = IconHelper.extensionPath || path.join(__dirname, '..');
+    return vscode.Uri.file(path.join(basePath, 'resources', relativePath));
+  }
+
+  public static getConnectionIcon(type: DatabaseType, isConnected: boolean = false): vscode.Uri {
     let iconName = 'database.svg';
 
     switch (type) {
