@@ -61,8 +61,10 @@ export class ErdWebviewProvider {
     tables.forEach((t) => {
       mermaidCode += `    "${t.name}" {\n`;
       t.columns.forEach((c: any) => {
+        const cleanType = (c.type || 'string').replace(/[\s(),]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'string';
+        const cleanName = c.name.replace(/[\s()-]/g, '_');
         const keyType = c.isPrimaryKey ? 'PK' : t.foreignKeys.some((f: any) => f.columnName === c.name) ? 'FK' : '';
-        mermaidCode += `        ${c.type || 'string'} ${c.name} ${keyType}\n`;
+        mermaidCode += `        ${cleanType} ${cleanName} ${keyType}\n`;
       });
       mermaidCode += `    }\n`;
     });
@@ -157,7 +159,7 @@ export class ErdWebviewProvider {
   <svg id="svgCanvas"></svg>
 
   <div class="header">
-    <h2>📊 ${ru ? 'Схема Связей с Стрелками (ER Diagram)' : 'Entity-Relationship Diagram'}: ${databaseName}</h2>
+    <h2>📊 ${ru ? 'Схема Связей со Стрелками (ER Diagram)' : 'Entity-Relationship Diagram'}: ${databaseName}</h2>
     <button id="copyMermaidBtn">📋 ${ru ? 'Копировать Mermaid Код' : 'Copy Mermaid Code'}</button>
   </div>
 
