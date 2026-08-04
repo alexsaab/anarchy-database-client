@@ -19,16 +19,35 @@ export class TableDesignWebviewProvider {
     const connectionConfig = tableNode.connectionConfig;
     const tableName = tableNode.table.name;
     const schemaName = tableNode.table.schema || 'public';
+    const db = connectionConfig.database || schemaName;
 
     const loadColumns = async () => {
       try {
         const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
-        const db = connectionConfig.database;
         if (db && connectionConfig.type === 'MySQL') {
           await driver.executeQuery(`USE \`${db}\`;`);
         }
+
         const columns = await driver.getColumns(tableName, db, schemaName);
-        panel.webview.postMessage({ type: 'renderColumns', columns });
+        let tableComment = '';
+
+        try {
+          if (connectionConfig.type === 'MySQL') {
+            const res = await driver.executeQuery(
+              `SELECT TABLE_COMMENT FROM information_schema.tables WHERE TABLE_SCHEMA = '${db}' AND TABLE_NAME = '${tableName}';`
+            );
+            tableComment = res.rows[0]?.TABLE_COMMENT || res.rows[0]?.table_comment || '';
+          } else if (connectionConfig.type === 'PostgreSQL') {
+            const res = await driver.executeQuery(
+              `SELECT obj_description(c.oid) as comment FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relname = '${tableName}' AND n.nspname = '${schemaName}';`
+            );
+            tableComment = res.rows[0]?.comment || '';
+          }
+        } catch (e) {
+          // Ignore comment query errors
+        }
+
+        panel.webview.postMessage({ type: 'renderColumns', columns, tableComment });
       } catch (err: any) {
         panel.webview.postMessage({ type: 'error', message: err.message });
       }
@@ -39,7 +58,6 @@ export class TableDesignWebviewProvider {
         case 'setTableComment': {
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
-            const db = connectionConfig.database;
             if (db && connectionConfig.type === 'MySQL') {
               await driver.executeQuery(`USE \`${db}\`;`);
             }
@@ -60,7 +78,6 @@ export class TableDesignWebviewProvider {
         case 'setColumnComment': {
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
-            const db = connectionConfig.database;
             if (db && connectionConfig.type === 'MySQL') {
               await driver.executeQuery(`USE \`${db}\`;`);
             }
@@ -86,7 +103,6 @@ export class TableDesignWebviewProvider {
         case 'addColumn': {
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
-            const db = connectionConfig.database;
             if (db && connectionConfig.type === 'MySQL') {
               await driver.executeQuery(`USE \`${db}\`;`);
             }
@@ -104,7 +120,6 @@ export class TableDesignWebviewProvider {
         case 'editColumn': {
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
-            const db = connectionConfig.database;
             if (db && connectionConfig.type === 'MySQL') {
               await driver.executeQuery(`USE \`${db}\`;`);
             }
@@ -125,7 +140,6 @@ export class TableDesignWebviewProvider {
         case 'dropColumn': {
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
-            const db = connectionConfig.database;
             if (db && connectionConfig.type === 'MySQL') {
               await driver.executeQuery(`USE \`${db}\`;`);
             }
@@ -160,7 +174,7 @@ export class TableDesignWebviewProvider {
       actions: ru ? 'Действия' : 'Actions',
       edit: ru ? '✏️ Изменить' : '✏️ Edit',
       editComment: ru ? '💬 Комментарий' : '💬 Comment',
-      tableCommentBtn: ru ? '💬 Комментарий К Таблице' : '💬 Table Comment',
+      tableCommentBtn: ru ? '💬 Комментарий Таблицы' : '💬 Table Comment',
       drop: ru ? '🗑️ Удалить' : '🗑️ Drop',
       save: ru ? 'Сохранить' : 'Save',
       cancel: ru ? 'Отмена' : 'Cancel',
@@ -229,6 +243,11 @@ export class TableDesignWebviewProvider {
       color: #98c379;
       font-size: 12px;
     }
+    .table-comment-badge {
+      font-size: 12px;
+      color: #61afef;
+      font-style: italic;
+    }
 
     /* Modal Overlay */
     #modalOverlay {
@@ -272,7 +291,10 @@ export class TableDesignWebviewProvider {
   </style>
 </head>
 <body>
-  <h3>${text.title}: ${tableName}</h3>
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+    <h3 style="margin:0;">${text.title}: ${tableName}</h3>
+    <span class="table-comment-badge" id="tableCommentDisplay"><i>no comment</i></span>
+  </div>
 
   <div class="toolbar">
     <button class="secondary" id="tableCommentBtn">${text.tableCommentBtn}</button>
@@ -321,6 +343,7 @@ export class TableDesignWebviewProvider {
 
   <script>
     const vscode = acquireVsCodeApi();
+    let currentTableComment = '';
 
     function openModal(title, bodyHtml, onConfirm) {
       document.getElementById('modalTitle').innerText = title;
@@ -342,7 +365,7 @@ export class TableDesignWebviewProvider {
       const html = \`
         <div class="modal-form-group">
           <label>${ru ? 'Введите комментарий для таблицы' : 'Enter table comment'}:</label>
-          <textarea id="tableCommentInput" style="width:100%; height:80px;" placeholder="Comment..."></textarea>
+          <textarea id="tableCommentInput" style="width:100%; height:80px;" placeholder="Comment...">\${currentTableComment || ''}</textarea>
         </div>
       \`;
 
@@ -406,6 +429,9 @@ export class TableDesignWebviewProvider {
     window.addEventListener('message', event => {
       const msg = event.data;
       if (msg.type === 'renderColumns') {
+        currentTableComment = msg.tableComment || '';
+        document.getElementById('tableCommentDisplay').innerHTML = currentTableComment ? '💬 ' + currentTableComment : '<i>no comment</i>';
+
         const body = document.getElementById('colBody');
         body.innerHTML = msg.columns.map(c => \`
           <tr>
