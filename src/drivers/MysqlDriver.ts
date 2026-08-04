@@ -81,29 +81,39 @@ export class MysqlDriver extends BaseDriver {
   async getColumns(tableName: string, databaseName?: string): Promise<ColumnInfo[]> {
     const db = databaseName || this.config.database;
     if (db) {
-      const sql = `
-        SELECT 
-          column_name, 
-          column_type, 
-          is_nullable, 
-          column_default, 
-          column_key, 
-          column_comment as comment
-        FROM information_schema.columns
-        WHERE table_schema = '${db}' AND table_name = '${tableName}'
-        ORDER BY ordinal_position ASC;
-      `;
       try {
+        await this.executeQuery(`USE \`${db}\`;`);
+        const sql = `
+          SELECT 
+            COLUMN_NAME, 
+            COLUMN_TYPE, 
+            IS_NULLABLE, 
+            COLUMN_DEFAULT, 
+            COLUMN_KEY, 
+            COLUMN_COMMENT
+          FROM information_schema.columns
+          WHERE table_schema = '${db}' AND table_name = '${tableName}'
+          ORDER BY ORDINAL_POSITION ASC;
+        `;
         const res = await this.executeQuery(sql);
         if (res.rows && res.rows.length > 0) {
-          return res.rows.map((r) => ({
-            name: r.column_name,
-            type: r.column_type,
-            nullable: r.is_nullable === 'YES',
-            isPrimaryKey: r.column_key === 'PRI',
-            defaultValue: r.column_default,
-            comment: r.comment || undefined,
-          }));
+          return res.rows.map((r) => {
+            const name = r.COLUMN_NAME ?? r.column_name ?? r.Field;
+            const type = r.COLUMN_TYPE ?? r.column_type ?? r.Type;
+            const nullable = (r.IS_NULLABLE ?? r.is_nullable ?? r.Null) === 'YES';
+            const isPk = (r.COLUMN_KEY ?? r.column_key ?? r.Key) === 'PRI';
+            const defVal = r.COLUMN_DEFAULT ?? r.column_default;
+            const comment = r.COLUMN_COMMENT ?? r.column_comment ?? r.Comment;
+
+            return {
+              name: String(name),
+              type: String(type),
+              nullable,
+              isPrimaryKey: isPk,
+              defaultValue: defVal !== null && defVal !== undefined ? String(defVal) : undefined,
+              comment: comment ? String(comment) : undefined,
+            };
+          });
         }
       } catch (e) {
         // Fallback to DESCRIBE
@@ -112,11 +122,11 @@ export class MysqlDriver extends BaseDriver {
 
     const res = await this.executeQuery(`DESCRIBE \`${tableName}\`;`);
     return res.rows.map((r) => ({
-      name: r.Field,
-      type: r.Type,
+      name: String(r.Field),
+      type: String(r.Type),
       nullable: r.Null === 'YES',
       isPrimaryKey: r.Key === 'PRI',
-      defaultValue: r.Default,
+      defaultValue: r.Default !== null && r.Default !== undefined ? String(r.Default) : undefined,
     }));
   }
 
@@ -125,18 +135,18 @@ export class MysqlDriver extends BaseDriver {
     if (!db) return [];
     const sql = `
       SELECT 
-        column_name, 
-        referenced_table_name AS foreign_table_name, 
-        referenced_column_name AS foreign_column_name
+        COLUMN_NAME as column_name, 
+        REFERENCED_TABLE_NAME AS foreign_table_name, 
+        REFERENCED_COLUMN_NAME AS foreign_column_name
       FROM information_schema.key_column_usage
-      WHERE table_schema = '${db}' AND table_name = '${tableName}' AND referenced_table_name IS NOT NULL;
+      WHERE table_schema = '${db}' AND table_name = '${tableName}' AND REFERENCED_TABLE_NAME IS NOT NULL;
     `;
     try {
       const res = await this.executeQuery(sql);
       return res.rows.map((r) => ({
-        columnName: r.column_name,
-        foreignTableName: r.foreign_table_name,
-        foreignColumnName: r.foreign_column_name,
+        columnName: r.column_name || r.COLUMN_NAME,
+        foreignTableName: r.foreign_table_name || r.REFERENCED_TABLE_NAME,
+        foreignColumnName: r.foreign_column_name || r.REFERENCED_COLUMN_NAME,
       }));
     } catch (e) {
       return [];
@@ -184,7 +194,7 @@ export class MysqlDriver extends BaseDriver {
 
     const countSql = `SELECT COUNT(*) as total FROM \`${tableName}\``;
     const countRes = await this.executeQuery(countSql);
-    const totalCount = parseInt(countRes.rows[0]?.total || '0', 10);
+    const totalCount = parseInt(countRes.rows[0]?.total || countRes.rows[0]?.TOTAL || '0', 10);
 
     const queryResult = await this.executeQuery(sql);
     queryResult.totalCount = totalCount;
