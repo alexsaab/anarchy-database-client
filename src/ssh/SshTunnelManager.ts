@@ -1,5 +1,6 @@
 import * as net from 'net';
 import * as fs from 'fs';
+import { Client } from 'ssh2';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 
 export interface SshTunnelResult {
@@ -9,13 +10,6 @@ export interface SshTunnelResult {
 
 export class SshTunnelManager {
   public static async createTunnel(config: ConnectionConfig, sshPassword?: string): Promise<SshTunnelResult> {
-    let ssh2: any;
-    try {
-      ssh2 = require('ssh2');
-    } catch (e) {
-      throw new Error('ssh2 module is not available in this environment.');
-    }
-
     if (!config.ssh || !config.ssh.enabled) {
       throw new Error('SSH is not enabled for this connection');
     }
@@ -29,7 +23,7 @@ export class SshTunnelManager {
     }
 
     return new Promise((resolve, reject) => {
-      const sshClient = new ssh2.Client();
+      const sshClient = new Client();
 
       const server = net.createServer((localSocket) => {
         sshClient.forwardOut(
