@@ -11,7 +11,7 @@ export class MysqlDriver extends BaseDriver {
   }
 
   async connect(): Promise<void> {
-    if (!this.isConnected) {
+    if (!this.isConnected || !this.connection) {
       this.connection = await mysql.createConnection({
         host: this.config.host || 'localhost',
         port: this.config.port || 3306,
@@ -45,51 +45,71 @@ export class MysqlDriver extends BaseDriver {
   }
 
   async getDatabases(): Promise<string[]> {
-    const res = await this.executeQuery('SHOW DATABASES;');
-    return res.rows
+    await this.connect();
+    const [results] = await this.connection!.query('SHOW DATABASES;');
+    const rows = results as any[];
+    return rows
       .map((r: any) => r.Database || r.database || Object.values(r)[0])
       .filter((db: any) => db && !['information_schema', 'mysql', 'performance_schema', 'sys'].includes(String(db)));
   }
 
   async getTables(databaseName?: string): Promise<TableInfo[]> {
-    const db = databaseName || this.config.database;
-    if (!db) return [];
-    await this.executeQuery(`USE \`${db}\`;`);
-    const res = await this.executeQuery(
-      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${db}' AND (TABLE_TYPE = 'BASE TABLE' OR TABLE_TYPE = 'SYSTEM VIEW');`
+    const targetDb = databaseName || this.config.database;
+    if (!targetDb) return [];
+    if (databaseName) this.config.database = databaseName;
+
+    await this.connect();
+    try {
+      await this.connection!.query(`USE \`${targetDb}\`;`);
+    } catch (e) {
+      // Ignore USE errors
+    }
+
+    const [results] = await this.connection!.query(
+      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${targetDb}' AND TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VIEW', 'SYSTEM TABLE');`
     );
-    return res.rows.map((r: any) => {
-      const name = r.TABLE_NAME || r.table_name || Object.values(r)[0];
-      return {
-        name: String(name),
-        type: 'table',
-      };
-    });
+
+    const rows = results as any[];
+    return rows.map((r: any) => ({
+      name: String(r.TABLE_NAME || r.table_name || Object.values(r)[0]),
+      type: 'table',
+    }));
   }
 
   async getViews(databaseName?: string): Promise<TableInfo[]> {
-    const db = databaseName || this.config.database;
-    if (!db) return [];
-    await this.executeQuery(`USE \`${db}\`;`);
-    const res = await this.executeQuery(
-      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${db}' AND TABLE_TYPE = 'VIEW';`
+    const targetDb = databaseName || this.config.database;
+    if (!targetDb) return [];
+    if (databaseName) this.config.database = databaseName;
+
+    await this.connect();
+    try {
+      await this.connection!.query(`USE \`${targetDb}\`;`);
+    } catch (e) {
+      // Ignore
+    }
+
+    const [results] = await this.connection!.query(
+      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${targetDb}' AND TABLE_TYPE = 'VIEW';`
     );
-    return res.rows.map((r: any) => {
-      const name = r.TABLE_NAME || r.table_name || Object.values(r)[0];
-      return {
-        name: String(name),
-        type: 'view',
-      };
-    });
+
+    const rows = results as any[];
+    return rows.map((r: any) => ({
+      name: String(r.TABLE_NAME || r.table_name || Object.values(r)[0]),
+      type: 'view',
+    }));
   }
 
   async getFunctions(databaseName?: string): Promise<RoutineInfo[]> {
-    const db = databaseName || this.config.database;
-    if (!db) return [];
-    const res = await this.executeQuery(
-      `SELECT ROUTINE_NAME, ROUTINE_COMMENT FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '${db}' AND ROUTINE_TYPE = 'FUNCTION';`
+    const targetDb = databaseName || this.config.database;
+    if (!targetDb) return [];
+    await this.connect();
+
+    const [results] = await this.connection!.query(
+      `SELECT ROUTINE_NAME, ROUTINE_COMMENT FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '${targetDb}' AND ROUTINE_TYPE = 'FUNCTION';`
     );
-    return res.rows.map((r: any) => ({
+
+    const rows = results as any[];
+    return rows.map((r: any) => ({
       name: String(r.ROUTINE_NAME || r.routine_name || Object.values(r)[0]),
       type: 'FUNCTION',
       comment: r.ROUTINE_COMMENT || r.routine_comment,
@@ -97,12 +117,16 @@ export class MysqlDriver extends BaseDriver {
   }
 
   async getProcedures(databaseName?: string): Promise<RoutineInfo[]> {
-    const db = databaseName || this.config.database;
-    if (!db) return [];
-    const res = await this.executeQuery(
-      `SELECT ROUTINE_NAME, ROUTINE_COMMENT FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '${db}' AND ROUTINE_TYPE = 'PROCEDURE';`
+    const targetDb = databaseName || this.config.database;
+    if (!targetDb) return [];
+    await this.connect();
+
+    const [results] = await this.connection!.query(
+      `SELECT ROUTINE_NAME, ROUTINE_COMMENT FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '${targetDb}' AND ROUTINE_TYPE = 'PROCEDURE';`
     );
-    return res.rows.map((r: any) => ({
+
+    const rows = results as any[];
+    return rows.map((r: any) => ({
       name: String(r.ROUTINE_NAME || r.routine_name || Object.values(r)[0]),
       type: 'PROCEDURE',
       comment: r.ROUTINE_COMMENT || r.routine_comment,
@@ -110,12 +134,16 @@ export class MysqlDriver extends BaseDriver {
   }
 
   async getTriggers(databaseName?: string): Promise<TriggerInfo[]> {
-    const db = databaseName || this.config.database;
-    if (!db) return [];
-    const res = await this.executeQuery(
-      `SELECT TRIGGER_NAME, EVENT_OBJECT_TABLE, ACTION_TIMING, EVENT_MANIPULATION FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = '${db}';`
+    const targetDb = databaseName || this.config.database;
+    if (!targetDb) return [];
+    await this.connect();
+
+    const [results] = await this.connection!.query(
+      `SELECT TRIGGER_NAME, EVENT_OBJECT_TABLE, ACTION_TIMING, EVENT_MANIPULATION FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = '${targetDb}';`
     );
-    return res.rows.map((r: any) => ({
+
+    const rows = results as any[];
+    return rows.map((r: any) => ({
       name: String(r.TRIGGER_NAME || r.trigger_name || Object.values(r)[0]),
       table: r.EVENT_OBJECT_TABLE || r.event_object_table,
       timing: r.ACTION_TIMING || r.action_timing,
@@ -124,24 +152,32 @@ export class MysqlDriver extends BaseDriver {
   }
 
   async getScript(name: string, type: 'view' | 'function' | 'procedure' | 'trigger', databaseName?: string): Promise<string> {
-    const db = databaseName || this.config.database;
-    if (db) {
-      await this.executeQuery(`USE \`${db}\`;`);
+    const targetDb = databaseName || this.config.database;
+    await this.connect();
+
+    if (targetDb) {
+      try {
+        await this.connection!.query(`USE \`${targetDb}\`;`);
+      } catch (e) {}
     }
 
     try {
       if (type === 'view') {
-        const res = await this.executeQuery(`SHOW CREATE VIEW \`${name}\`;`);
-        return res.rows[0]?.['Create View'] || res.rows[0]?.['create view'] || Object.values(res.rows[0] || {})[1] || `-- Create View ${name}`;
+        const [res] = await this.connection!.query(`SHOW CREATE VIEW \`${name}\`;`);
+        const row = (res as any[])[0];
+        return row?.['Create View'] || row?.['create view'] || Object.values(row || {})[1] || `-- Create View ${name}`;
       } else if (type === 'procedure') {
-        const res = await this.executeQuery(`SHOW CREATE PROCEDURE \`${name}\`;`);
-        return res.rows[0]?.['Create Procedure'] || res.rows[0]?.['create procedure'] || Object.values(res.rows[0] || {})[2] || `-- Create Procedure ${name}`;
+        const [res] = await this.connection!.query(`SHOW CREATE PROCEDURE \`${name}\`;`);
+        const row = (res as any[])[0];
+        return row?.['Create Procedure'] || row?.['create procedure'] || Object.values(row || {})[2] || `-- Create Procedure ${name}`;
       } else if (type === 'function') {
-        const res = await this.executeQuery(`SHOW CREATE FUNCTION \`${name}\`;`);
-        return res.rows[0]?.['Create Function'] || res.rows[0]?.['create function'] || Object.values(res.rows[0] || {})[2] || `-- Create Function ${name}`;
+        const [res] = await this.connection!.query(`SHOW CREATE FUNCTION \`${name}\`;`);
+        const row = (res as any[])[0];
+        return row?.['Create Function'] || row?.['create function'] || Object.values(row || {})[2] || `-- Create Function ${name}`;
       } else if (type === 'trigger') {
-        const res = await this.executeQuery(`SHOW CREATE TRIGGER \`${name}\`;`);
-        return res.rows[0]?.['SQL Original Statement'] || res.rows[0]?.['sql original statement'] || Object.values(res.rows[0] || {})[2] || `-- Create Trigger ${name}`;
+        const [res] = await this.connection!.query(`SHOW CREATE TRIGGER \`${name}\`;`);
+        const row = (res as any[])[0];
+        return row?.['SQL Original Statement'] || row?.['sql original statement'] || Object.values(row || {})[2] || `-- Create Trigger ${name}`;
       }
     } catch (e: any) {
       return `-- Failed to fetch DDL for ${type} ${name}: ${e.message}`;
@@ -150,15 +186,16 @@ export class MysqlDriver extends BaseDriver {
   }
 
   async getColumns(tableName: string, databaseName?: string): Promise<ColumnInfo[]> {
-    const db = databaseName || this.config.database;
-    if (db) {
-      await this.executeQuery(`USE \`${db}\`;`);
-    }
-    const res = await this.executeQuery(
-      `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, COLUMN_COMMENT, EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '${db}' AND TABLE_NAME = '${tableName}' ORDER BY ORDINAL_POSITION;`
+    const targetDb = databaseName || this.config.database;
+    if (!targetDb) return [];
+    await this.connect();
+
+    const [results] = await this.connection!.query(
+      `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, COLUMN_COMMENT, EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '${targetDb}' AND TABLE_NAME = '${tableName}' ORDER BY ORDINAL_POSITION;`
     );
 
-    return res.rows.map((r: any) => {
+    const rows = results as any[];
+    return rows.map((r: any) => {
       const colName = r.COLUMN_NAME ?? r.column_name ?? r.Field ?? r.field ?? Object.values(r)[0];
       const dataType = r.DATA_TYPE ?? r.data_type ?? r.Type ?? r.type ?? 'VARCHAR';
       const isNullable = r.IS_NULLABLE ?? r.is_nullable ?? r.Null ?? r.null;
@@ -178,12 +215,16 @@ export class MysqlDriver extends BaseDriver {
   }
 
   async getForeignKeys(tableName: string, databaseName?: string): Promise<ForeignKeyInfo[]> {
-    const db = databaseName || this.config.database;
-    const res = await this.executeQuery(
-      `SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = '${db}' AND TABLE_NAME = '${tableName}' AND REFERENCED_TABLE_NAME IS NOT NULL;`
+    const targetDb = databaseName || this.config.database;
+    if (!targetDb) return [];
+    await this.connect();
+
+    const [results] = await this.connection!.query(
+      `SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = '${targetDb}' AND TABLE_NAME = '${tableName}' AND REFERENCED_TABLE_NAME IS NOT NULL;`
     );
 
-    return res.rows.map((r: any) => ({
+    const rows = results as any[];
+    return rows.map((r: any) => ({
       constraintName: r.CONSTRAINT_NAME || r.constraint_name,
       columnName: r.COLUMN_NAME || r.column_name,
       referencedTable: r.REFERENCED_TABLE_NAME || r.referenced_table_name,
@@ -197,7 +238,9 @@ export class MysqlDriver extends BaseDriver {
 
     const db = this.config.database;
     if (db) {
-      await this.connection!.query(`USE \`${db}\`;`);
+      try {
+        await this.connection!.query(`USE \`${db}\`;`);
+      } catch (e) {}
     }
 
     const [results, fields] = await this.connection!.query(sql);
