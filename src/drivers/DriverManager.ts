@@ -5,6 +5,7 @@ import { SqliteDriver } from './SqliteDriver.js';
 import { RedisDriver } from './RedisDriver.js';
 import { MongoDriver } from './MongoDriver.js';
 import { ElasticsearchDriver } from './ElasticsearchDriver.js';
+import { ClickhouseDriver } from './ClickhouseDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { SshTunnelManager, SshTunnelResult } from '../ssh/SshTunnelManager.js';
 
@@ -58,37 +59,44 @@ export class DriverManager {
         case 'Elasticsearch':
           driver = new ElasticsearchDriver(finalConfig, password);
           break;
+        case 'ClickHouse':
+          driver = new ClickhouseDriver(finalConfig, password);
+          break;
         default:
           throw new Error(`Unsupported database type: ${config.type}`);
       }
+
+      await driver.connect();
       this.activeDrivers.set(driverKey, driver);
     }
+
     return driver;
   }
 
-  public async disconnectAll(): Promise<void> {
+  public async removeDriver(configId: string): Promise<void> {
     for (const [key, driver] of this.activeDrivers.entries()) {
-      await driver.disconnect();
-    }
-    this.activeDrivers.clear();
-
-    for (const [id, tunnel] of this.sshTunnels.entries()) {
-      tunnel.close();
-    }
-    this.sshTunnels.clear();
-  }
-
-  public async removeDriver(id: string): Promise<void> {
-    for (const [key, driver] of this.activeDrivers.entries()) {
-      if (key.startsWith(id)) {
+      if (key.startsWith(`${configId}_`)) {
         await driver.disconnect();
         this.activeDrivers.delete(key);
       }
     }
-    const tunnel = this.sshTunnels.get(id);
+
+    const tunnel = this.sshTunnels.get(configId);
     if (tunnel) {
-      tunnel.close();
-      this.sshTunnels.delete(id);
+      await SshTunnelManager.closeTunnel(tunnel);
+      this.sshTunnels.delete(configId);
     }
+  }
+
+  public async disconnectAll(): Promise<void> {
+    for (const driver of this.activeDrivers.values()) {
+      await driver.disconnect();
+    }
+    this.activeDrivers.clear();
+
+    for (const tunnel of this.sshTunnels.values()) {
+      await SshTunnelManager.closeTunnel(tunnel);
+    }
+    this.sshTunnels.clear();
   }
 }

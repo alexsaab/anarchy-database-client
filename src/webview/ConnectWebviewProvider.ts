@@ -1,32 +1,24 @@
 import * as vscode from 'vscode';
 import { ConnectionStorageService } from '../storage/ConnectionStorage.js';
-import { DriverManager } from '../drivers/DriverManager.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
+import { DriverManager } from '../drivers/DriverManager.js';
 import { isRussian, t } from '../util/i18n.js';
 
 export class ConnectWebviewProvider {
-  public static currentPanel: vscode.WebviewPanel | undefined;
-
   public static show(
     context: vscode.ExtensionContext,
     storageService: ConnectionStorageService,
-    onSaveSuccess: () => void,
+    onSaved: () => void,
     editingConfig?: ConnectionConfig,
-    initialPassword?: string,
-    initialSshPassword?: string
+    existingPassword?: string,
+    existingSshPassword?: string
   ) {
-    if (ConnectWebviewProvider.currentPanel) {
-      ConnectWebviewProvider.currentPanel.reveal(vscode.ViewColumn.One);
-      return;
-    }
-
-    const panelTitle = editingConfig
-      ? t(`Edit: ${editingConfig.name}`, `Редактирование: ${editingConfig.name}`)
-      : t('New Database Connection', 'Новое подключение к БД');
+    const isEdit = !!editingConfig;
+    const title = isEdit ? t('Edit Connection', 'Редактировать подключение') : t('Add Connection', 'Добавить подключение');
 
     const panel = vscode.window.createWebviewPanel(
-      'addConnection',
-      panelTitle,
+      'dbClientConnect',
+      title,
       vscode.ViewColumn.One,
       {
         enableScripts: true,
@@ -34,80 +26,90 @@ export class ConnectWebviewProvider {
       }
     );
 
-    ConnectWebviewProvider.currentPanel = panel;
-    panel.webview.html = ConnectWebviewProvider.getHtml(editingConfig, initialPassword, initialSshPassword);
-
-    panel.onDidDispose(() => {
-      ConnectWebviewProvider.currentPanel = undefined;
-    });
-
     panel.webview.onDidReceiveMessage(async (message) => {
       switch (message.type) {
-        case 'testConnection': {
+        case 'test': {
           try {
-            const config: ConnectionConfig = message.config;
-            const driver = await DriverManager.getInstance().getDriver(config, message.password, message.sshPassword);
-            const result = await driver.testConnection();
-            panel.webview.postMessage({ type: 'testResult', result });
+            const tempConfig: ConnectionConfig = message.data.config;
+            const password = message.data.password;
+            const sshPassword = message.data.sshPassword;
+            const driver = await DriverManager.getInstance().getDriver(tempConfig, password, sshPassword);
+            const res = await driver.testConnection();
+            panel.webview.postMessage({ type: 'testResult', result: res });
           } catch (err: any) {
-            panel.webview.postMessage({ type: 'testResult', result: { success: false, message: err.message } });
+            panel.webview.postMessage({
+              type: 'testResult',
+              result: { success: false, message: err.message || 'Connection test failed' },
+            });
           }
           break;
         }
-        case 'saveConnection': {
-          const config: ConnectionConfig = message.config;
-          await DriverManager.getInstance().removeDriver(config.id);
-          await storageService.saveConnection(config, message.password, message.sshPassword);
-          const savedMsg = t(`Connection "${config.name}" saved successfully!`, `Подключение "${config.name}" успешно сохранено!`);
-          vscode.window.showInformationMessage(savedMsg);
-          panel.dispose();
-          onSaveSuccess();
+        case 'save': {
+          try {
+            const config: ConnectionConfig = message.data.config;
+            const password = message.data.password;
+            const sshPassword = message.data.sshPassword;
+
+            await storageService.saveConnection(config);
+            if (password !== undefined) {
+              await storageService.savePassword(config.id, password);
+            }
+            if (sshPassword !== undefined) {
+              await storageService.saveSshPassword(config.id, sshPassword);
+            }
+
+            vscode.window.showInformationMessage(
+              t(`Successfully saved connection "${config.name}"!`, `Подключение "${config.name}" успешно сохранено!`)
+            );
+            onSaved();
+            panel.dispose();
+          } catch (err: any) {
+            vscode.window.showErrorMessage(`Failed to save connection: ${err.message}`);
+          }
           break;
         }
       }
     });
+
+    panel.webview.html = ConnectWebviewProvider.getHtml(editingConfig, existingPassword, existingSshPassword);
   }
 
-  private static getHtml(initialConfig?: ConnectionConfig, initialPassword?: string, initialSshPassword?: string): string {
-    const configJson = JSON.stringify(initialConfig || null);
-    const passJson = JSON.stringify(initialPassword || '');
-    const sshPassJson = JSON.stringify(initialSshPassword || '');
+  private static getHtml(
+    config?: ConnectionConfig,
+    password?: string,
+    sshPassword?: string
+  ): string {
     const ru = isRussian();
-
     const text = {
-      title: ru ? '⚙️ Настройка подключения (Anarchy DB)' : '⚙️ Connection Configuration (Anarchy DB)',
-      connName: ru ? 'Имя подключения' : 'Connection Name',
-      connNamePh: ru ? 'например, Production PostgreSQL' : 'e.g. Production PostgreSQL',
-      group: ru ? 'Группа / Проект' : 'Group / Project',
-      groupPh: ru ? 'например, Production, Dev' : 'e.g. Production, Dev',
-      colorBadge: ru ? 'Цвет метки подключения' : 'Connection Color / Badge',
-      colorDefault: ru ? 'По умолчанию' : 'Default',
-      colorRed: ru ? 'Красный (Production)' : 'Red (Production)',
-      colorOrange: ru ? 'Оранжевый' : 'Orange',
-      colorYellow: ru ? 'Желтый (Staging)' : 'Yellow (Staging)',
-      colorGreen: ru ? 'Зеленый (Local)' : 'Green (Local)',
-      colorBlue: ru ? 'Синий' : 'Blue',
-      colorPurple: ru ? 'Фиолетовый' : 'Purple',
+      title: config ? (ru ? 'Редактировать Подключение' : 'Edit Database Connection') : (ru ? 'Новое Подключение к Базе Данных' : 'New Database Connection'),
+      name: ru ? 'Имя подключения' : 'Connection Name',
+      namePh: ru ? 'Мой Проект DB' : 'My Project DB',
+      group: ru ? 'Группа / Проект' : 'Group / Folder',
+      groupPh: ru ? 'Production, Staging, Local' : 'Production, Staging, Local',
+      color: ru ? 'Цветовая метка' : 'Color Badge',
       dbType: ru ? 'Тип СУБД' : 'Database Type',
-      host: ru ? 'Хост (Host)' : 'Host',
+      host: ru ? 'Хост' : 'Host',
       port: ru ? 'Порт' : 'Port',
       user: ru ? 'Пользователь' : 'User',
       password: ru ? 'Пароль' : 'Password',
-      database: ru ? 'Имя базы данных' : 'Database Name',
-      dbPath: ru ? 'Путь к файлу базы данных (.db, .sqlite)' : 'Database File Path (.db, .sqlite)',
-      dbPathPh: '/path/to/database.sqlite',
-      sshSection: ru ? '🔒 SSH-Туннелирование (Опционально)' : '🔒 SSH Tunneling (Optional)',
-      sshEnable: ru ? 'Включить SSH-туннель' : 'Enable SSH Tunnel',
+      database: ru ? 'База данных / Схема' : 'Database / Schema',
+      dbPath: ru ? 'Путь к файлу базы (.db)' : 'Database File Path (.db)',
+      dbPathPh: ru ? '/path/to/database.db' : '/path/to/database.db',
+      sshSection: ru ? '🔒 SSH Туннель' : '🔒 SSH Tunnel',
+      sshEnable: ru ? 'Использовать SSH туннелирование' : 'Use SSH Tunnel',
       sshHost: ru ? 'SSH Хост' : 'SSH Host',
       sshPort: ru ? 'SSH Порт' : 'SSH Port',
-      sshUser: ru ? 'Имя пользователя SSH' : 'SSH Username',
-      sshPass: ru ? 'Пароль SSH / Passphrase' : 'SSH Password / Passphrase',
-      usePk: ru ? 'Использовать файл приватного ключа' : 'Use Private Key File',
-      pkPath: ru ? 'Путь к приватному ключу (~/.ssh/id_rsa)' : 'Private Key Path (~/.ssh/id_rsa)',
-      testBtn: ru ? 'Проверить соединение' : 'Test Connection',
-      saveBtn: ru ? 'Сохранить подключение' : 'Save Connection',
-      connecting: ru ? 'Подключение...' : 'Connecting...',
+      sshUser: ru ? 'SSH Пользователь' : 'SSH User',
+      sshPass: ru ? 'SSH Пароль' : 'SSH Password',
+      usePk: ru ? 'Использовать SSH Ключ (Private Key)' : 'Use Private Key File',
+      pkPath: ru ? 'Путь к Private Key' : 'Private Key Path',
+      testBtn: ru ? '⚡ Проверить Соединение' : '⚡ Test Connection',
+      saveBtn: ru ? '💾 Сохранить Подключение' : '💾 Save Connection',
     };
+
+    const configJson = JSON.stringify(config || null);
+    const passJson = JSON.stringify(password || '');
+    const sshPassJson = JSON.stringify(sshPassword || '');
 
     return `<!DOCTYPE html>
 <html lang="${ru ? 'ru' : 'en'}">
@@ -162,10 +164,10 @@ export class ConnectWebviewProvider {
     button {
       flex: 1;
       padding: 10px;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
       font-weight: bold;
+      border-radius: 4px;
+      border: none;
+      cursor: pointer;
     }
     button.primary {
       background: var(--vscode-button-background);
@@ -175,30 +177,24 @@ export class ConnectWebviewProvider {
       background: var(--vscode-button-secondaryBackground);
       color: var(--vscode-button-secondaryForeground);
     }
+    button:hover {
+      background: var(--vscode-button-hoverBackground);
+    }
     .color-picker {
       display: flex;
-      gap: 10px;
+      gap: 8px;
       margin-top: 5px;
     }
     .color-dot {
-      width: 24px;
-      height: 24px;
+      width: 22px;
+      height: 22px;
       border-radius: 50%;
       cursor: pointer;
       border: 2px solid transparent;
-      box-sizing: border-box;
     }
     .color-dot.selected {
       border-color: #ffffff;
       transform: scale(1.15);
-    }
-    .section-title {
-      font-size: 14px;
-      font-weight: bold;
-      margin-top: 20px;
-      margin-bottom: 10px;
-      border-bottom: 1px dashed var(--vscode-panel-border);
-      padding-bottom: 4px;
     }
     #status {
       margin-top: 15px;
@@ -208,41 +204,47 @@ export class ConnectWebviewProvider {
       font-size: 13px;
     }
     #status.success {
-      display: block;
-      background: #1b4d27;
-      color: #98ecb3;
+      background: #1e3a1e;
+      color: #4ade80;
+      border: 1px solid #22c55e;
     }
     #status.error {
-      display: block;
-      background: #5a1d1d;
-      color: #fca5a5;
+      background: #451a1a;
+      color: #f87171;
+      border: 1px solid #ef4444;
+    }
+    .section-title {
+      font-weight: bold;
+      margin-top: 20px;
+      margin-bottom: 10px;
+      padding-bottom: 4px;
+      border-bottom: 1px solid var(--vscode-panel-border, #333);
     }
   </style>
 </head>
 <body>
   <h2>${text.title}</h2>
-  
+
+  <div class="form-group">
+    <label>${text.name}</label>
+    <input type="text" id="name" placeholder="${text.namePh}">
+  </div>
+
   <div class="row">
-    <div class="form-group col" style="flex: 2;">
-      <label>${text.connName}</label>
-      <input type="text" id="name" value="${ru ? 'Моя База Данных' : 'My Database'}" placeholder="${text.connNamePh}">
-    </div>
-    <div class="form-group col" style="flex: 1;">
+    <div class="form-group col">
       <label>${text.group}</label>
       <input type="text" id="group" placeholder="${text.groupPh}">
     </div>
-  </div>
-
-  <div class="form-group">
-    <label>${text.colorBadge}</label>
-    <div class="color-picker">
-      <div class="color-dot selected" data-color="default" style="background:#888;" title="${text.colorDefault}"></div>
-      <div class="color-dot" data-color="red" style="background:#f87171;" title="${text.colorRed}"></div>
-      <div class="color-dot" data-color="orange" style="background:#fb923c;" title="${text.colorOrange}"></div>
-      <div class="color-dot" data-color="yellow" style="background:#facc15;" title="${text.colorYellow}"></div>
-      <div class="color-dot" data-color="green" style="background:#4ade80;" title="${text.colorGreen}"></div>
-      <div class="color-dot" data-color="blue" style="background:#60a5fa;" title="${text.colorBlue}"></div>
-      <div class="color-dot" data-color="purple" style="background:#c084fc;" title="${text.colorPurple}"></div>
+    <div class="form-group col">
+      <label>${text.color}</label>
+      <div class="color-picker">
+        <div class="color-dot" style="background: #3b82f6;" data-color="#3b82f6"></div>
+        <div class="color-dot" style="background: #10b981;" data-color="#10b981"></div>
+        <div class="color-dot" style="background: #f59e0b;" data-color="#f59e0b"></div>
+        <div class="color-dot" style="background: #ef4444;" data-color="#ef4444"></div>
+        <div class="color-dot" style="background: #8b5cf6;" data-color="#8b5cf6"></div>
+        <div class="color-dot" style="background: #ec4899;" data-color="#ec4899"></div>
+      </div>
     </div>
   </div>
 
@@ -255,6 +257,7 @@ export class ConnectWebviewProvider {
       <option value="Redis">Redis</option>
       <option value="MongoDB">MongoDB</option>
       <option value="Elasticsearch">Elasticsearch</option>
+      <option value="ClickHouse">ClickHouse</option>
     </select>
   </div>
 
@@ -398,6 +401,7 @@ export class ConnectWebviewProvider {
           if (type === 'Redis') portInput.value = 6379;
           if (type === 'MongoDB') portInput.value = 27017;
           if (type === 'Elasticsearch') portInput.value = 9200;
+          if (type === 'ClickHouse') portInput.value = 8123;
         }
       }
     }
@@ -440,29 +444,34 @@ export class ConnectWebviewProvider {
       };
     }
 
-    document.getElementById('testBtn').addEventListener('click', () => {
+    document.getElementById('testBtn').onclick = () => {
       const status = document.getElementById('status');
-      status.className = '';
       status.style.display = 'block';
-      status.innerText = "${text.connecting}";
-      vscode.postMessage({ type: 'testConnection', ...getConfig() });
-    });
+      status.className = '';
+      status.innerText = '${ru ? 'Проверка соединения...' : 'Testing connection...'}';
+      vscode.postMessage({ type: 'test', data: getConfig() });
+    };
 
-    document.getElementById('saveBtn').addEventListener('click', () => {
-      vscode.postMessage({ type: 'saveConnection', ...getConfig() });
-    });
+    document.getElementById('saveBtn').onclick = () => {
+      const data = getConfig();
+      if (!data.config.name) {
+        alert('${ru ? 'Пожалуйста, введите имя подключения' : 'Please enter a connection name'}');
+        return;
+      }
+      vscode.postMessage({ type: 'save', data: data });
+    };
 
     window.addEventListener('message', event => {
-      const msg = event.data;
-      if (msg.type === 'testResult') {
+      const message = event.data;
+      if (message.type === 'testResult') {
         const status = document.getElementById('status');
         status.style.display = 'block';
-        if (msg.result.success) {
+        if (message.result.success) {
           status.className = 'success';
-          status.innerText = '✅ ' + msg.result.message;
+          status.innerText = '✅ ' + (message.result.message || 'Connection successful!');
         } else {
           status.className = 'error';
-          status.innerText = '❌ ' + msg.result.message;
+          status.innerText = '❌ ' + (message.result.message || 'Connection failed');
         }
       }
     });

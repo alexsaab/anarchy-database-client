@@ -36,6 +36,9 @@ export class IconHelper {
       case 'Elasticsearch':
         iconName = isConnected ? 'server/elasticsearch_active.svg' : 'server/elasticsearch.svg';
         break;
+      case 'ClickHouse':
+        iconName = isConnected ? 'server/clickhouse_active.svg' : 'server/clickhouse.svg';
+        break;
       default:
         iconName = 'server/db2.svg';
         break;
@@ -58,9 +61,5 @@ export class IconHelper {
 
   public static getQueryIcon(): vscode.Uri {
     return IconHelper.getResourcePath('icon/webview/query.svg');
-  }
-
-  public static getGroupIcon(): vscode.ThemeIcon {
-    return new vscode.ThemeIcon('folder');
   }
 }
