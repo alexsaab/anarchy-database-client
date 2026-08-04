@@ -23,7 +23,11 @@ export class TableDesignWebviewProvider {
     const loadColumns = async () => {
       try {
         const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
-        const columns = await driver.getColumns(tableName, connectionConfig.database, schemaName);
+        const db = connectionConfig.database;
+        if (db && connectionConfig.type === 'MySQL') {
+          await driver.executeQuery(`USE \`${db}\`;`);
+        }
+        const columns = await driver.getColumns(tableName, db, schemaName);
         panel.webview.postMessage({ type: 'renderColumns', columns });
       } catch (err: any) {
         panel.webview.postMessage({ type: 'error', message: err.message });
@@ -35,6 +39,10 @@ export class TableDesignWebviewProvider {
         case 'setTableComment': {
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
+            const db = connectionConfig.database;
+            if (db && connectionConfig.type === 'MySQL') {
+              await driver.executeQuery(`USE \`${db}\`;`);
+            }
             let sql = '';
             if (connectionConfig.type === 'PostgreSQL') {
               sql = `COMMENT ON TABLE "${schemaName}"."${tableName}" IS '${(msg.comment || '').replace(/'/g, "''")}';`;
@@ -52,11 +60,20 @@ export class TableDesignWebviewProvider {
         case 'setColumnComment': {
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
+            const db = connectionConfig.database;
+            if (db && connectionConfig.type === 'MySQL') {
+              await driver.executeQuery(`USE \`${db}\`;`);
+            }
             let sql = '';
             if (connectionConfig.type === 'PostgreSQL') {
               sql = `COMMENT ON COLUMN "${schemaName}"."${tableName}"."${msg.columnName}" IS '${(msg.comment || '').replace(/'/g, "''")}';`;
             } else {
-              sql = `ALTER TABLE \`${tableName}\` MODIFY COLUMN \`${msg.columnName}\` ${msg.columnType} COMMENT '${(msg.comment || '').replace(/'/g, "''")}';`;
+              const cols = await driver.getColumns(tableName, db, schemaName);
+              const colInfo = cols.find((c) => c.name === msg.columnName);
+              const colType = colInfo ? colInfo.type : msg.columnType;
+              const nullSql = colInfo && !colInfo.nullable ? ' NOT NULL' : '';
+              const defSql = colInfo && colInfo.defaultValue !== undefined && colInfo.defaultValue !== null ? ` DEFAULT '${colInfo.defaultValue}'` : '';
+              sql = `ALTER TABLE \`${tableName}\` MODIFY COLUMN \`${msg.columnName}\` ${colType}${nullSql}${defSql} COMMENT '${(msg.comment || '').replace(/'/g, "''")}';`;
             }
             await driver.executeQuery(sql);
             vscode.window.showInformationMessage(t(`Comment for "${msg.columnName}" updated!`, `Комментарий для колонки "${msg.columnName}" обновлен!`));
@@ -69,7 +86,13 @@ export class TableDesignWebviewProvider {
         case 'addColumn': {
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
-            const sql = `ALTER TABLE "${tableName}" ADD COLUMN "${msg.col.name}" ${msg.col.type}${msg.col.nullable ? '' : ' NOT NULL'};`;
+            const db = connectionConfig.database;
+            if (db && connectionConfig.type === 'MySQL') {
+              await driver.executeQuery(`USE \`${db}\`;`);
+            }
+            const sql = connectionConfig.type === 'MySQL'
+              ? `ALTER TABLE \`${tableName}\` ADD COLUMN \`${msg.col.name}\` ${msg.col.type}${msg.col.nullable ? '' : ' NOT NULL'};`
+              : `ALTER TABLE "${tableName}" ADD COLUMN "${msg.col.name}" ${msg.col.type}${msg.col.nullable ? '' : ' NOT NULL'};`;
             await driver.executeQuery(sql);
             vscode.window.showInformationMessage(t(`Added column "${msg.col.name}"`, `Колонка "${msg.col.name}" добавлена`));
             await loadColumns();
@@ -81,6 +104,10 @@ export class TableDesignWebviewProvider {
         case 'editColumn': {
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
+            const db = connectionConfig.database;
+            if (db && connectionConfig.type === 'MySQL') {
+              await driver.executeQuery(`USE \`${db}\`;`);
+            }
             let alterSql = '';
             if (connectionConfig.type === 'PostgreSQL') {
               alterSql = `ALTER TABLE "${tableName}" RENAME COLUMN "${msg.oldName}" TO "${msg.newName}";\nALTER TABLE "${tableName}" ALTER COLUMN "${msg.newName}" TYPE ${msg.newType};`;
@@ -98,7 +125,13 @@ export class TableDesignWebviewProvider {
         case 'dropColumn': {
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
-            const sql = `ALTER TABLE "${tableName}" DROP COLUMN "${msg.columnName}";`;
+            const db = connectionConfig.database;
+            if (db && connectionConfig.type === 'MySQL') {
+              await driver.executeQuery(`USE \`${db}\`;`);
+            }
+            const sql = connectionConfig.type === 'MySQL'
+              ? `ALTER TABLE \`${tableName}\` DROP COLUMN \`${msg.columnName}\`;`
+              : `ALTER TABLE "${tableName}" DROP COLUMN "${msg.columnName}";`;
             await driver.executeQuery(sql);
             vscode.window.showInformationMessage(t(`Dropped column "${msg.columnName}"`, `Колонка "${msg.columnName}" удалена`));
             await loadColumns();

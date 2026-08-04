@@ -63,8 +63,9 @@ export class MysqlDriver extends BaseDriver {
   }
 
   async getTables(databaseName?: string): Promise<TableInfo[]> {
-    if (databaseName) {
-      await this.executeQuery(`USE \`${databaseName}\`;`);
+    const db = databaseName || this.config.database;
+    if (db) {
+      await this.executeQuery(`USE \`${db}\`;`);
     }
     const res = await this.executeQuery('SHOW FULL TABLES;');
     return res.rows.map((r) => {
@@ -156,6 +157,13 @@ export class MysqlDriver extends BaseDriver {
   async executeQuery(sql: string): Promise<QueryResult> {
     if (!this.connection) {
       await this.connect();
+    }
+    if (this.config.database) {
+      try {
+        await this.connection!.query(`USE \`${this.config.database}\`;`);
+      } catch (e) {
+        // Ignore USE database errors
+      }
     }
     const startTime = Date.now();
     const [rows, fields] = await this.connection!.query(sql);
