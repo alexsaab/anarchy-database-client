@@ -47,21 +47,21 @@ export class MysqlDriver extends BaseDriver {
   async getDatabases(): Promise<string[]> {
     const res = await this.executeQuery('SHOW DATABASES;');
     return res.rows
-      .map((r: any) => r.Database || r.database)
-      .filter((db: string) => !['information_schema', 'mysql', 'performance_schema', 'sys'].includes(db));
+      .map((r: any) => r.Database || r.database || Object.values(r)[0])
+      .filter((db: any) => db && !['information_schema', 'mysql', 'performance_schema', 'sys'].includes(String(db)));
   }
 
   async getTables(databaseName?: string): Promise<TableInfo[]> {
     const db = databaseName || this.config.database;
-    if (db) {
-      await this.executeQuery(`USE \`${db}\`;`);
-    }
-    const res = await this.executeQuery('SHOW FULL TABLES WHERE Table_type = "BASE TABLE";');
+    if (!db) return [];
+    await this.executeQuery(`USE \`${db}\`;`);
+    const res = await this.executeQuery(
+      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${db}' AND (TABLE_TYPE = 'BASE TABLE' OR TABLE_TYPE = 'SYSTEM VIEW');`
+    );
     return res.rows.map((r: any) => {
-      const keys = Object.keys(r);
-      const tableName = r[keys[0]];
+      const name = r.TABLE_NAME || r.table_name || Object.values(r)[0];
       return {
-        name: tableName,
+        name: String(name),
         type: 'table',
       };
     });
@@ -69,14 +69,15 @@ export class MysqlDriver extends BaseDriver {
 
   async getViews(databaseName?: string): Promise<TableInfo[]> {
     const db = databaseName || this.config.database;
-    if (db) {
-      await this.executeQuery(`USE \`${db}\`;`);
-    }
-    const res = await this.executeQuery('SHOW FULL TABLES WHERE Table_type = "VIEW";');
+    if (!db) return [];
+    await this.executeQuery(`USE \`${db}\`;`);
+    const res = await this.executeQuery(
+      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${db}' AND TABLE_TYPE = 'VIEW';`
+    );
     return res.rows.map((r: any) => {
-      const keys = Object.keys(r);
+      const name = r.TABLE_NAME || r.table_name || Object.values(r)[0];
       return {
-        name: r[keys[0]],
+        name: String(name),
         type: 'view',
       };
     });
@@ -84,11 +85,12 @@ export class MysqlDriver extends BaseDriver {
 
   async getFunctions(databaseName?: string): Promise<RoutineInfo[]> {
     const db = databaseName || this.config.database;
+    if (!db) return [];
     const res = await this.executeQuery(
       `SELECT ROUTINE_NAME, ROUTINE_COMMENT FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '${db}' AND ROUTINE_TYPE = 'FUNCTION';`
     );
     return res.rows.map((r: any) => ({
-      name: r.ROUTINE_NAME || r.routine_name,
+      name: String(r.ROUTINE_NAME || r.routine_name || Object.values(r)[0]),
       type: 'FUNCTION',
       comment: r.ROUTINE_COMMENT || r.routine_comment,
     }));
@@ -96,11 +98,12 @@ export class MysqlDriver extends BaseDriver {
 
   async getProcedures(databaseName?: string): Promise<RoutineInfo[]> {
     const db = databaseName || this.config.database;
+    if (!db) return [];
     const res = await this.executeQuery(
       `SELECT ROUTINE_NAME, ROUTINE_COMMENT FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '${db}' AND ROUTINE_TYPE = 'PROCEDURE';`
     );
     return res.rows.map((r: any) => ({
-      name: r.ROUTINE_NAME || r.routine_name,
+      name: String(r.ROUTINE_NAME || r.routine_name || Object.values(r)[0]),
       type: 'PROCEDURE',
       comment: r.ROUTINE_COMMENT || r.routine_comment,
     }));
@@ -108,11 +111,12 @@ export class MysqlDriver extends BaseDriver {
 
   async getTriggers(databaseName?: string): Promise<TriggerInfo[]> {
     const db = databaseName || this.config.database;
+    if (!db) return [];
     const res = await this.executeQuery(
       `SELECT TRIGGER_NAME, EVENT_OBJECT_TABLE, ACTION_TIMING, EVENT_MANIPULATION FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = '${db}';`
     );
     return res.rows.map((r: any) => ({
-      name: r.TRIGGER_NAME || r.trigger_name,
+      name: String(r.TRIGGER_NAME || r.trigger_name || Object.values(r)[0]),
       table: r.EVENT_OBJECT_TABLE || r.event_object_table,
       timing: r.ACTION_TIMING || r.action_timing,
       event: r.EVENT_MANIPULATION || r.event_manipulation,
@@ -128,16 +132,16 @@ export class MysqlDriver extends BaseDriver {
     try {
       if (type === 'view') {
         const res = await this.executeQuery(`SHOW CREATE VIEW \`${name}\`;`);
-        return res.rows[0]?.['Create View'] || res.rows[0]?.['create view'] || `-- Create View ${name}`;
+        return res.rows[0]?.['Create View'] || res.rows[0]?.['create view'] || Object.values(res.rows[0] || {})[1] || `-- Create View ${name}`;
       } else if (type === 'procedure') {
         const res = await this.executeQuery(`SHOW CREATE PROCEDURE \`${name}\`;`);
-        return res.rows[0]?.['Create Procedure'] || res.rows[0]?.['create procedure'] || `-- Create Procedure ${name}`;
+        return res.rows[0]?.['Create Procedure'] || res.rows[0]?.['create procedure'] || Object.values(res.rows[0] || {})[2] || `-- Create Procedure ${name}`;
       } else if (type === 'function') {
         const res = await this.executeQuery(`SHOW CREATE FUNCTION \`${name}\`;`);
-        return res.rows[0]?.['Create Function'] || res.rows[0]?.['create function'] || `-- Create Function ${name}`;
+        return res.rows[0]?.['Create Function'] || res.rows[0]?.['create function'] || Object.values(res.rows[0] || {})[2] || `-- Create Function ${name}`;
       } else if (type === 'trigger') {
         const res = await this.executeQuery(`SHOW CREATE TRIGGER \`${name}\`;`);
-        return res.rows[0]?.['SQL Original Statement'] || res.rows[0]?.['sql original statement'] || `-- Create Trigger ${name}`;
+        return res.rows[0]?.['SQL Original Statement'] || res.rows[0]?.['sql original statement'] || Object.values(res.rows[0] || {})[2] || `-- Create Trigger ${name}`;
       }
     } catch (e: any) {
       return `-- Failed to fetch DDL for ${type} ${name}: ${e.message}`;
@@ -155,7 +159,7 @@ export class MysqlDriver extends BaseDriver {
     );
 
     return res.rows.map((r: any) => {
-      const colName = r.COLUMN_NAME ?? r.column_name ?? r.Field ?? r.field;
+      const colName = r.COLUMN_NAME ?? r.column_name ?? r.Field ?? r.field ?? Object.values(r)[0];
       const dataType = r.DATA_TYPE ?? r.data_type ?? r.Type ?? r.type ?? 'VARCHAR';
       const isNullable = r.IS_NULLABLE ?? r.is_nullable ?? r.Null ?? r.null;
       const colKey = r.COLUMN_KEY ?? r.column_key ?? r.Key ?? r.key;
@@ -163,7 +167,7 @@ export class MysqlDriver extends BaseDriver {
       const colComment = r.COLUMN_COMMENT ?? r.column_comment ?? r.Comment ?? r.comment;
 
       return {
-        name: colName,
+        name: String(colName),
         type: String(dataType).toUpperCase(),
         nullable: isNullable === 'YES' || isNullable === true,
         isPrimaryKey: colKey === 'PRI',
