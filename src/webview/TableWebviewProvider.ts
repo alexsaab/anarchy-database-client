@@ -79,7 +79,7 @@ export class TableWebviewProvider {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
             const keys = Object.keys(msg.rowData);
             const colNames = keys.map((k) => `"${k}"`).join(', ');
-            const valStrings = keys.map((k) => (msg.rowData[k] === null ? 'NULL' : `'${String(msg.rowData[k]).replace(/'/g, "''")}'`)).join(', ');
+            const valStrings = keys.map((k) => (msg.rowData[k] === null || msg.rowData[k] === '' ? 'NULL' : `'${String(msg.rowData[k]).replace(/'/g, "''")}'`)).join(', ');
 
             const insertSql = `INSERT INTO "${schemaName}"."${tableName}" (${colNames}) VALUES (${valStrings});`;
             await driver.executeQuery(insertSql);
@@ -169,6 +169,8 @@ export class TableWebviewProvider {
       stats: ru ? 'Всего строк' : 'Total rows',
       time: ru ? 'Время выполнения' : 'Query time',
       err: ru ? '❌ Ошибка:' : '❌ Error:',
+      save: ru ? 'Сохранить' : 'Save',
+      cancel: ru ? 'Отмена' : 'Cancel',
     };
 
     return `<!DOCTYPE html>
@@ -198,7 +200,7 @@ export class TableWebviewProvider {
       margin-bottom: 10px;
       flex-wrap: wrap;
     }
-    input, select, button {
+    input, select, button, textarea {
       padding: 6px 10px;
       background: var(--vscode-input-background);
       color: var(--vscode-input-foreground);
@@ -269,6 +271,46 @@ export class TableWebviewProvider {
       border-radius: 4px;
       margin-bottom: 10px;
     }
+
+    /* Modal Overlay */
+    #modalOverlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-content {
+      background: var(--vscode-sideBar-background);
+      padding: 20px;
+      border-radius: 6px;
+      width: 420px;
+      max-width: 90%;
+      max-height: 80vh;
+      overflow-y: auto;
+      border: 1px solid var(--vscode-panel-border, #555);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    }
+    .modal-form-group {
+      margin-bottom: 12px;
+    }
+    .modal-form-group label {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 12px;
+      font-weight: bold;
+    }
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 18px;
+      justify-content: flex-end;
+    }
   </style>
 </head>
 <body>
@@ -302,6 +344,18 @@ export class TableWebviewProvider {
     </table>
   </div>
 
+  <!-- HTML Modal -->
+  <div id="modalOverlay">
+    <div class="modal-content">
+      <h3 id="modalTitle" style="margin-top:0;">Modal</h3>
+      <div id="modalBody"></div>
+      <div class="modal-actions">
+        <button class="secondary" onclick="closeModal()">${text.cancel}</button>
+        <button id="modalConfirmBtn">${text.save}</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const vscode = acquireVsCodeApi();
     let currentPage = 1;
@@ -312,6 +366,22 @@ export class TableWebviewProvider {
 
     function exportData(format) {
       vscode.postMessage({ type: 'export', format });
+    }
+
+    function openModal(title, bodyHtml, onConfirm) {
+      document.getElementById('modalTitle').innerText = title;
+      document.getElementById('modalBody').innerHTML = bodyHtml;
+      document.getElementById('modalOverlay').style.display = 'flex';
+
+      const confirmBtn = document.getElementById('modalConfirmBtn');
+      confirmBtn.onclick = () => {
+        onConfirm();
+        closeModal();
+      };
+    }
+
+    function closeModal() {
+      document.getElementById('modalOverlay').style.display = 'none';
     }
 
     document.getElementById('refreshBtn').onclick = () => {
@@ -333,14 +403,22 @@ export class TableWebviewProvider {
 
     document.getElementById('addRowBtn').onclick = () => {
       if (currentFields.length === 0) return;
-      const rowData = {};
-      currentFields.forEach(f => {
-        const val = prompt('Enter value for column "' + f.name + '":');
-        if (val !== null) rowData[f.name] = val;
-      });
-      if (Object.keys(rowData).length > 0) {
+
+      let fieldsHtml = currentFields.map(f => \`
+        <div class="modal-form-group">
+          <label>\${f.name} (\${f.type})</label>
+          <input type="text" id="add_col_\${f.name}" placeholder="Value..." style="width:100%;">
+        </div>
+      \`).join('');
+
+      openModal('${text.addRow}', fieldsHtml, () => {
+        const rowData = {};
+        currentFields.forEach(f => {
+          const val = document.getElementById('add_col_' + f.name).value;
+          if (val !== '') rowData[f.name] = val;
+        });
         vscode.postMessage({ type: 'insertRow', rowData });
-      }
+      });
     };
 
     document.getElementById('prevBtn').onclick = () => {
@@ -358,16 +436,24 @@ export class TableWebviewProvider {
     };
 
     function editCell(colName, pkCol, pkVal, currentVal) {
-      const newVal = prompt('Edit value for "' + colName + '":', currentVal === 'null' ? '' : currentVal);
-      if (newVal !== null && newVal !== currentVal) {
+      const html = \`
+        <div class="modal-form-group">
+          <label>Value for "\${colName}":</label>
+          <textarea id="cellValInput" style="width:100%; height:80px;">\${currentVal === 'null' ? '' : currentVal}</textarea>
+        </div>
+      \`;
+
+      openModal('${ru ? 'Редактировать ячейку' : 'Edit Cell'}: ' + colName, html, () => {
+        const newVal = document.getElementById('cellValInput').value;
         vscode.postMessage({ type: 'updateCell', columnName: colName, pkColumn: pkCol, pkValue: pkVal, newValue: newVal });
-      }
+      });
     }
 
     function deleteRow(pkCol, pkVal) {
-      if (confirm('Delete row with ' + pkCol + ' = ' + pkVal + '?')) {
+      const html = \`<p>${ru ? 'Удалить строку с первичным ключом' : 'Delete row with PK'} <b>\${pkCol} = \${pkVal}</b>?</p>\`;
+      openModal('${ru ? 'Подтвердите удаление' : 'Confirm Deletion'}', html, () => {
         vscode.postMessage({ type: 'deleteRow', pkColumn: pkCol, pkValue: pkVal });
-      }
+      });
     }
 
     function renderRows(rows) {
@@ -378,7 +464,7 @@ export class TableWebviewProvider {
         const cells = currentFields.map(f => {
           const val = row[f.name];
           const valStr = val === null ? 'null' : String(val);
-          return \`<td class="editable" onclick="editCell('\${f.name}', '\${pkField ? pkField.name : ''}', '\${pkVal}', '\${valStr}')">\${val === null ? '<i>null</i>' : valStr}</td>\`;
+          return \`<td class="editable" onclick="editCell('\${f.name}', '\${pkField ? pkField.name : ''}', '\${pkVal}', '\${valStr.replace(/'/g, "\\\\'")}')">\${val === null ? '<i>null</i>' : valStr}</td>\`;
         }).join('');
         return \`<tr><td>\${(currentPage - 1) * pageSize + idx + 1}</td>\${cells}<td><button class="danger" onclick="deleteRow('\${pkField ? pkField.name : ''}', '\${pkVal}')">🗑️</button></td></tr>\`;
       }).join('');
