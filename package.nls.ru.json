@@ -1,0 +1,11 @@
+{
+  "viewsContainer.databaseClient": "Anarchy DB Client",
+  "view.databaseExplorer": "ОБЗОР БАЗ ДАННЫХ",
+  "command.addConnection": "Добавить подключение",
+  "command.editConnection": "Редактировать подключение",
+  "command.refreshTree": "Обновить",
+  "command.deleteConnection": "Удалить подключение",
+  "command.openTable": "Открыть таблицу",
+  "command.newQuery": "Новая SQL-консоль",
+  "command.runQuery": "Выполнить SQL-запрос"
+}

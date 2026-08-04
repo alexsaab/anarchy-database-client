@@ -1,0 +1,162 @@
+{
+  "name": "anarchy-database-client",
+  "displayName": "Anarchy Database Client",
+  "description": "Полнофункциональный клиент баз данных для VS Code (клон cweijan.vscode-database-client2)",
+  "version": "0.2.3",
+  "publisher": "alexsaab",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alexsaab/anarchy-database-client.git"
+  },
+  "icon": "resources/icon.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:database-client-explorer"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "database-client",
+          "title": "%viewsContainer.databaseClient%",
+          "icon": "resources/database-a.svg"
+        }
+      ]
+    },
+    "views": {
+      "database-client": [
+        {
+          "id": "database-client-explorer",
+          "name": "%view.databaseExplorer%"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "dbClient.addConnection",
+        "title": "%command.addConnection%",
+        "icon": "$(add)"
+      },
+      {
+        "command": "dbClient.editConnection",
+        "title": "%command.editConnection%",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "dbClient.refreshTree",
+        "title": "%command.refreshTree%",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "dbClient.deleteConnection",
+        "title": "%command.deleteConnection%",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "dbClient.openTable",
+        "title": "%command.openTable%"
+      },
+      {
+        "command": "dbClient.newQuery",
+        "title": "%command.newQuery%",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "dbClient.runQuery",
+        "title": "%command.runQuery%"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "dbClient.addConnection",
+          "when": "view == database-client-explorer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dbClient.refreshTree",
+          "when": "view == database-client-explorer",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "dbClient.editConnection",
+          "when": "view == database-client-explorer && viewItem == connectionNode",
+          "group": "inline"
+        },
+        {
+          "command": "dbClient.editConnection",
+          "when": "view == database-client-explorer && viewItem == connectionNode",
+          "group": "1_modification@1"
+        },
+        {
+          "command": "dbClient.deleteConnection",
+          "when": "view == database-client-explorer && viewItem == connectionNode",
+          "group": "inline"
+        },
+        {
+          "command": "dbClient.deleteConnection",
+          "when": "view == database-client-explorer && viewItem == connectionNode",
+          "group": "1_modification@2"
+        },
+        {
+          "command": "dbClient.newQuery",
+          "when": "view == database-client-explorer && (viewItem == connectionNode || viewItem == databaseNode)",
+          "group": "inline"
+        },
+        {
+          "command": "dbClient.openTable",
+          "when": "view == database-client-explorer && viewItem == tableNode",
+          "group": "inline"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "dbClient.runQuery",
+          "when": "editorLangId == sql",
+          "group": "1_modification"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "dbClient.runQuery",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorLangId == sql"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "compile": "tsc -p ./",
+    "watch": "tsc -w -p ./",
+    "build": "node esbuild.js",
+    "dev": "node esbuild.js --watch"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "pg": "^8.11.3",
+    "@types/pg": "^8.11.0",
+    "mysql2": "^3.9.1",
+    "sqlite3": "^5.1.7",
+    "@types/sqlite3": "^3.1.11",
+    "ioredis": "^5.3.2",
+    "@types/mongodb": "^4.0.7",
+    "mongodb": "^6.3.0",
+    "ssh2": "^1.15.0",
+    "@types/ssh2": "^1.11.13"
+  }
+}
