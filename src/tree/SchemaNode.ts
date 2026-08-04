@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { BaseNode } from './BaseNode.js';
 import { TableGroupNode } from './TableGroupNode.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
+import { IconHelper } from '../util/IconHelper.js';
 
 export class SchemaNode extends BaseNode {
   public schemaName: string;
@@ -19,7 +20,7 @@ export class SchemaNode extends BaseNode {
 
   getTreeItem(): vscode.TreeItem {
     const item = new vscode.TreeItem(this.label, vscode.TreeItemCollapsibleState.Collapsed);
-    item.iconPath = new vscode.ThemeIcon('symbol-namespace');
+    item.iconPath = IconHelper.getSchemaIcon();
     item.contextValue = 'schemaNode';
     return item;
   }

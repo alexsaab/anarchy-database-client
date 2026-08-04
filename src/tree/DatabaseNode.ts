@@ -4,6 +4,7 @@ import { TableGroupNode } from './TableGroupNode.js';
 import { SchemaNode } from './SchemaNode.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { DriverManager } from '../drivers/DriverManager.js';
+import { IconHelper } from '../util/IconHelper.js';
 
 export class DatabaseNode extends BaseNode {
   public dbName: string;
@@ -21,7 +22,7 @@ export class DatabaseNode extends BaseNode {
 
   getTreeItem(): vscode.TreeItem {
     const item = new vscode.TreeItem(this.label, vscode.TreeItemCollapsibleState.Collapsed);
-    item.iconPath = new vscode.ThemeIcon('database');
+    item.iconPath = IconHelper.getDatabaseIcon();
     item.contextValue = 'databaseNode';
     return item;
   }

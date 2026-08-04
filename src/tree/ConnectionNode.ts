@@ -4,6 +4,7 @@ import { DatabaseNode } from './DatabaseNode.js';
 import { TableGroupNode } from './TableGroupNode.js';
 import { ConnectionConfig, ConnectionColor } from '../model/ConnectionConfig.js';
 import { DriverManager } from '../drivers/DriverManager.js';
+import { IconHelper } from '../util/IconHelper.js';
 
 export class ConnectionNode extends BaseNode {
   public config: ConnectionConfig;
@@ -42,9 +43,14 @@ export class ConnectionNode extends BaseNode {
     item.description = `${this.config.type} (${this.config.host || 'local'}:${this.config.port || ''})`;
 
     const themeColor = this.getColorTheme(this.config.color);
-    const iconName = this.isConnected ? 'plug' : 'server';
 
-    item.iconPath = themeColor ? new vscode.ThemeIcon(iconName, themeColor) : new vscode.ThemeIcon(iconName);
+    if (themeColor) {
+      const iconName = this.isConnected ? 'plug' : 'server';
+      item.iconPath = new vscode.ThemeIcon(iconName, themeColor);
+    } else {
+      item.iconPath = IconHelper.getConnectionIcon(this.config.type, this.isConnected);
+    }
+
     item.contextValue = 'connectionNode';
     return item;
   }

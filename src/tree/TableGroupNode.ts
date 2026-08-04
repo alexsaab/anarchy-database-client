@@ -4,6 +4,7 @@ import { TableNode } from './TableNode.js';
 import { DriverManager } from '../drivers/DriverManager.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { isRussian } from '../util/i18n.js';
+import { IconHelper } from '../util/IconHelper.js';
 
 export class TableGroupNode extends BaseNode {
   public connectionConfig: ConnectionConfig;
@@ -22,7 +23,7 @@ export class TableGroupNode extends BaseNode {
 
   getTreeItem(): vscode.TreeItem {
     const item = new vscode.TreeItem(this.label, vscode.TreeItemCollapsibleState.Collapsed);
-    item.iconPath = new vscode.ThemeIcon('folder-library');
+    item.iconPath = IconHelper.getFolderIcon();
     item.contextValue = 'tableGroupNode';
     return item;
   }
