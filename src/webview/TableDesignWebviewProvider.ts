@@ -32,6 +32,40 @@ export class TableDesignWebviewProvider {
 
     panel.webview.onDidReceiveMessage(async (msg) => {
       switch (msg.type) {
+        case 'setTableComment': {
+          try {
+            const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
+            let sql = '';
+            if (connectionConfig.type === 'PostgreSQL') {
+              sql = `COMMENT ON TABLE "${schemaName}"."${tableName}" IS '${msg.comment.replace(/'/g, "''")}';`;
+            } else {
+              sql = `ALTER TABLE \`${tableName}\` COMMENT = '${msg.comment.replace(/'/g, "''")}';`;
+            }
+            await driver.executeQuery(sql);
+            vscode.window.showInformationMessage(t('Table comment updated!', 'Комментарий к таблице обновлен!'));
+            await loadColumns();
+          } catch (e: any) {
+            vscode.window.showErrorMessage(`Failed to set table comment: ${e.message}`);
+          }
+          break;
+        }
+        case 'setColumnComment': {
+          try {
+            const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
+            let sql = '';
+            if (connectionConfig.type === 'PostgreSQL') {
+              sql = `COMMENT ON COLUMN "${schemaName}"."${tableName}"."${msg.columnName}" IS '${msg.comment.replace(/'/g, "''")}';`;
+            } else {
+              sql = `ALTER TABLE \`${tableName}\` MODIFY COLUMN \`${msg.columnName}\` ${msg.columnType} COMMENT '${msg.comment.replace(/'/g, "''")}';`;
+            }
+            await driver.executeQuery(sql);
+            vscode.window.showInformationMessage(t(`Comment for "${msg.columnName}" updated!`, `Комментарий для колонки "${msg.columnName}" обновлен!`));
+            await loadColumns();
+          } catch (e: any) {
+            vscode.window.showErrorMessage(`Failed to set column comment: ${e.message}`);
+          }
+          break;
+        }
         case 'addColumn': {
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
@@ -83,14 +117,17 @@ export class TableDesignWebviewProvider {
   private static getHtml(tableName: string): string {
     const ru = isRussian();
     const text = {
-      title: ru ? '🛠 Конструктор Таблицы (Редактирование Колонок)' : '🛠 Table Designer & Column Editor',
+      title: ru ? '🛠 Конструктор Таблицы и Комментариев' : '🛠 Table & Comment Designer',
       addCol: ru ? '➕ Добавить Колонку' : '➕ Add Column',
       colName: ru ? 'Имя колонки' : 'Column Name',
       colType: ru ? 'Тип данных' : 'Data Type',
       nullable: ru ? 'NULLABLE' : 'NULLABLE',
       pk: ru ? 'PRIMARY KEY' : 'PRIMARY KEY',
+      comment: ru ? 'Комментарий' : 'Comment',
       actions: ru ? 'Действия' : 'Actions',
       edit: ru ? '✏️ Изменить' : '✏️ Edit',
+      editComment: ru ? '💬 Комментарий' : '💬 Comment',
+      tableCommentBtn: ru ? '💬 Комментарий К Таблице' : '💬 Table Comment',
       drop: ru ? '🗑️ Удалить' : '🗑️ Drop',
     };
 
@@ -115,6 +152,7 @@ export class TableDesignWebviewProvider {
       padding: 10px;
       border-radius: 4px;
       align-items: center;
+      flex-wrap: wrap;
     }
     input, select, button {
       padding: 6px 10px;
@@ -151,12 +189,21 @@ export class TableDesignWebviewProvider {
     th {
       background: var(--vscode-editorHeader-noTabsBackground, #252526);
     }
+    .comment-tag {
+      font-style: italic;
+      color: #98c379;
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
   <h3>${text.title}: ${tableName}</h3>
 
   <div class="toolbar">
+    <button class="secondary" id="tableCommentBtn">${text.tableCommentBtn}</button>
+
+    <span style="border-left: 1px solid #555; margin: 0 5px; height: 18px;"></span>
+
     <input type="text" id="newColName" placeholder="${text.colName}">
     <select id="newColType">
       <option value="VARCHAR(255)">VARCHAR(255)</option>
@@ -178,6 +225,7 @@ export class TableDesignWebviewProvider {
         <th>${text.colType}</th>
         <th>${text.nullable}</th>
         <th>${text.pk}</th>
+        <th>${text.comment}</th>
         <th>${text.actions}</th>
       </tr>
     </thead>
@@ -186,6 +234,13 @@ export class TableDesignWebviewProvider {
 
   <script>
     const vscode = acquireVsCodeApi();
+
+    document.getElementById('tableCommentBtn').onclick = () => {
+      const comment = prompt('${ru ? 'Введите комментарий для таблицы' : 'Enter comment for table'} "${tableName}":');
+      if (comment !== null) {
+        vscode.postMessage({ type: 'setTableComment', comment });
+      }
+    };
 
     document.getElementById('addBtn').onclick = () => {
       const name = document.getElementById('newColName').value;
@@ -199,10 +254,17 @@ export class TableDesignWebviewProvider {
     function editCol(oldName, oldType) {
       const newName = prompt('Enter new column name:', oldName);
       if (!newName) return;
-      const newType = prompt('Enter data type (e.g. VARCHAR(255), INT, TEXT):', oldType);
+      const newType = prompt('Enter data type:', oldType);
       if (!newType) return;
 
       vscode.postMessage({ type: 'editColumn', oldName, newName, newType });
+    }
+
+    function editColComment(colName, colType, currentComment) {
+      const comment = prompt('${ru ? 'Введите комментарий для колонки' : 'Enter comment for column'} "' + colName + '":', currentComment || '');
+      if (comment !== null) {
+        vscode.postMessage({ type: 'setColumnComment', columnName: colName, columnType: colType, comment });
+      }
     }
 
     function dropCol(colName) {
@@ -221,7 +283,9 @@ export class TableDesignWebviewProvider {
             <td>\${c.type}</td>
             <td>\${c.nullable ? 'YES' : 'NO'}</td>
             <td>\${c.isPrimaryKey ? '🔑 YES' : 'NO'}</td>
+            <td class="comment-tag">\${c.comment ? '💬 ' + c.comment : '<i>-</i>'}</td>
             <td>
+              <button class="secondary" onclick="editColComment('\${c.name}', '\${c.type}', '\${c.comment || ''}')">${text.editComment}</button>
               <button class="secondary" onclick="editCol('\${c.name}', '\${c.type}')">${text.edit}</button>
               <button class="danger" onclick="dropCol('\${c.name}')">${text.drop}</button>
             </td>

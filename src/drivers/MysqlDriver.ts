@@ -79,9 +79,37 @@ export class MysqlDriver extends BaseDriver {
   }
 
   async getColumns(tableName: string, databaseName?: string): Promise<ColumnInfo[]> {
-    if (databaseName) {
-      await this.executeQuery(`USE \`${databaseName}\`;`);
+    const db = databaseName || this.config.database;
+    if (db) {
+      const sql = `
+        SELECT 
+          column_name, 
+          column_type, 
+          is_nullable, 
+          column_default, 
+          column_key, 
+          column_comment as comment
+        FROM information_schema.columns
+        WHERE table_schema = '${db}' AND table_name = '${tableName}'
+        ORDER BY ordinal_position ASC;
+      `;
+      try {
+        const res = await this.executeQuery(sql);
+        if (res.rows && res.rows.length > 0) {
+          return res.rows.map((r) => ({
+            name: r.column_name,
+            type: r.column_type,
+            nullable: r.is_nullable === 'YES',
+            isPrimaryKey: r.column_key === 'PRI',
+            defaultValue: r.column_default,
+            comment: r.comment || undefined,
+          }));
+        }
+      } catch (e) {
+        // Fallback to DESCRIBE
+      }
     }
+
     const res = await this.executeQuery(`DESCRIBE \`${tableName}\`;`);
     return res.rows.map((r) => ({
       name: r.Field,

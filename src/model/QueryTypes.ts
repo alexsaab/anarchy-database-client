@@ -3,7 +3,8 @@ export interface ColumnInfo {
   type: string;
   nullable: boolean;
   isPrimaryKey?: boolean;
-  defaultValue?: string | null;
+  defaultValue?: string;
+  comment?: string;
 }
 
 export interface TableInfo {
@@ -14,7 +15,7 @@ export interface TableInfo {
 }
 
 export interface QueryResult {
-  rows: Record<string, any>[];
+  rows: any[];
   fields: ColumnInfo[];
   affectedRows?: number;
   costTimeMs: number;
@@ -24,7 +25,7 @@ export interface QueryResult {
 export interface PageParams {
   page: number;
   pageSize: number;
+  filterSql?: string;
   sortField?: string;
   sortOrder?: 'ASC' | 'DESC';
-  filterSql?: string;
 }

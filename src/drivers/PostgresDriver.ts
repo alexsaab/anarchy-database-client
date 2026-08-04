@@ -97,7 +97,8 @@ export class PostgresDriver extends BaseDriver {
         c.data_type, 
         c.is_nullable, 
         c.column_default,
-        COALESCE(tc.constraint_type, '') as constraint_type
+        COALESCE(tc.constraint_type, '') as constraint_type,
+        pgd.description as comment
       FROM information_schema.columns c
       LEFT JOIN (
         SELECT kcu.table_schema, kcu.table_name, kcu.column_name, tc.constraint_type
@@ -111,6 +112,10 @@ export class PostgresDriver extends BaseDriver {
         ON c.table_schema = tc.table_schema 
         AND c.table_name = tc.table_name 
         AND c.column_name = tc.column_name
+      LEFT JOIN pg_catalog.pg_statio_all_tables st 
+        ON c.table_schema = st.schemaname AND c.table_name = st.relname
+      LEFT JOIN pg_catalog.pg_description pgd 
+        ON pgd.objoid = st.relid AND pgd.objsubid = c.ordinal_position
       WHERE c.table_schema = '${schemaName}' AND c.table_name = '${tableName}'
       ORDER BY c.ordinal_position ASC;
     `;
@@ -121,6 +126,7 @@ export class PostgresDriver extends BaseDriver {
       nullable: r.is_nullable === 'YES',
       isPrimaryKey: r.constraint_type === 'PRIMARY KEY',
       defaultValue: r.column_default,
+      comment: r.comment || undefined,
     }));
   }
 
