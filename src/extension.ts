@@ -22,7 +22,10 @@ export function activate(context: vscode.ExtensionContext) {
   const storageService = new ConnectionStorageService(context);
   const treeProvider = new DatabaseTreeProvider(storageService);
 
+  // Register all tree view IDs to prevent any extension ID conflict
   vscode.window.registerTreeDataProvider('database-client-explorer', treeProvider);
+  vscode.window.registerTreeDataProvider('dbClientView', treeProvider);
+  vscode.window.registerTreeDataProvider('anarchy-database-client-explorer', treeProvider);
 
   context.subscriptions.push(
     vscode.commands.registerCommand('dbClient.addConnection', () => {
