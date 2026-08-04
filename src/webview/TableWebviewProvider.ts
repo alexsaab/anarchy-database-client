@@ -7,6 +7,24 @@ import { ExportService } from '../export/ExportService.js';
 import { isRussian, t } from '../util/i18n.js';
 
 export class TableWebviewProvider {
+  private static quoteId(dbType: string, name: string): string {
+    if (dbType === 'MySQL') {
+      return `\`${name}\``;
+    }
+    return `"${name}"`;
+  }
+
+  private static formatTableRef(dbType: string, tableName: string, schemaName?: string): string {
+    if (dbType === 'MySQL') {
+      return `\`${tableName}\``;
+    }
+    if (dbType === 'SQLite') {
+      return `"${tableName}"`;
+    }
+    const s = schemaName || 'public';
+    return `"${s}"."${tableName}"`;
+  }
+
   public static openTable(tableNode: TableNode) {
     const title = t(`Data: ${tableNode.table.name}`, `Данные: ${tableNode.table.name}`);
     const panel = vscode.window.createWebviewPanel(
@@ -52,6 +70,9 @@ export class TableWebviewProvider {
     };
 
     panel.webview.onDidReceiveMessage(async (msg) => {
+      const dbType = connectionConfig.type;
+      const tableRef = TableWebviewProvider.formatTableRef(dbType, tableName, schemaName);
+
       switch (msg.type) {
         case 'fetchData':
           if (msg.params) {
@@ -63,10 +84,11 @@ export class TableWebviewProvider {
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
             const valStr = msg.newValue === null ? 'NULL' : `'${String(msg.newValue).replace(/'/g, "''")}'`;
-            const pkCol = msg.pkColumn || 'id';
+            const pkCol = TableWebviewProvider.quoteId(dbType, msg.pkColumn || 'id');
+            const targetCol = TableWebviewProvider.quoteId(dbType, msg.columnName);
             const pkValStr = typeof msg.pkValue === 'number' ? msg.pkValue : `'${msg.pkValue}'`;
 
-            const updateSql = `UPDATE "${schemaName}"."${tableName}" SET "${msg.columnName}" = ${valStr} WHERE "${pkCol}" = ${pkValStr};`;
+            const updateSql = `UPDATE ${tableRef} SET ${targetCol} = ${valStr} WHERE ${pkCol} = ${pkValStr};`;
             await driver.executeQuery(updateSql);
             vscode.window.showInformationMessage(t('Cell updated successfully!', 'Ячейка успешно обновлена!'));
             await loadData();
@@ -78,10 +100,10 @@ export class TableWebviewProvider {
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
             const keys = Object.keys(msg.rowData);
-            const colNames = keys.map((k) => `"${k}"`).join(', ');
+            const colNames = keys.map((k) => TableWebviewProvider.quoteId(dbType, k)).join(', ');
             const valStrings = keys.map((k) => (msg.rowData[k] === null || msg.rowData[k] === '' ? 'NULL' : `'${String(msg.rowData[k]).replace(/'/g, "''")}'`)).join(', ');
 
-            const insertSql = `INSERT INTO "${schemaName}"."${tableName}" (${colNames}) VALUES (${valStrings});`;
+            const insertSql = `INSERT INTO ${tableRef} (${colNames}) VALUES (${valStrings});`;
             await driver.executeQuery(insertSql);
             vscode.window.showInformationMessage(t('Row inserted successfully!', 'Новая строка добавлена!'));
             await loadData();
@@ -92,10 +114,10 @@ export class TableWebviewProvider {
         case 'deleteRow':
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
-            const pkCol = msg.pkColumn || 'id';
+            const pkCol = TableWebviewProvider.quoteId(dbType, msg.pkColumn || 'id');
             const pkValStr = typeof msg.pkValue === 'number' ? msg.pkValue : `'${msg.pkValue}'`;
 
-            const deleteSql = `DELETE FROM "${schemaName}"."${tableName}" WHERE "${pkCol}" = ${pkValStr};`;
+            const deleteSql = `DELETE FROM ${tableRef} WHERE ${pkCol} = ${pkValStr};`;
             await driver.executeQuery(deleteSql);
             vscode.window.showInformationMessage(t('Row deleted successfully!', 'Строка удалена!'));
             await loadData();
