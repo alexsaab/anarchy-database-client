@@ -32,8 +32,10 @@ export class DatabaseNode extends BaseNode {
   }
 
   async getChildren(): Promise<BaseNode[]> {
+    const dbType = this.connectionConfig.type;
+
     try {
-      if (this.connectionConfig.type === 'PostgreSQL') {
+      if (dbType === 'PostgreSQL') {
         const driver = await DriverManager.getInstance().getDriver(this.connectionConfig, this.password, this.sshPassword);
         const schemas = await driver.getSchemas(this.dbName);
 
@@ -46,6 +48,38 @@ export class DatabaseNode extends BaseNode {
     }
 
     const schema = this.connectionConfig.schema || 'public';
+
+    // NoSQL / Document databases customization
+    if (dbType === 'MongoDB' || dbType === 'CouchDB' || dbType === 'Couchbase' || dbType === 'Firestore') {
+      return [
+        new TableGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
+      ];
+    }
+
+    if (dbType === 'Elasticsearch') {
+      return [
+        new TableGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
+        new ViewGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
+      ];
+    }
+
+    if (dbType === 'SQLite') {
+      return [
+        new TableGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
+        new ViewGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
+        new TriggerGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
+      ];
+    }
+
+    if (dbType === 'ClickHouse') {
+      return [
+        new TableGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
+        new ViewGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
+        new FunctionGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
+      ];
+    }
+
+    // Default Relational DBs (MySQL, PostgreSQL)
     return [
       new TableGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
       new ViewGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),

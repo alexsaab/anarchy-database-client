@@ -30,6 +30,29 @@ export class SchemaNode extends BaseNode {
   }
 
   async getChildren(): Promise<BaseNode[]> {
+    const dbType = this.connectionConfig.type;
+
+    if (dbType === 'MongoDB' || dbType === 'CouchDB' || dbType === 'Couchbase' || dbType === 'Firestore') {
+      return [
+        new TableGroupNode(this.connectionConfig, this.password, this.sshPassword, this.schemaName, this),
+      ];
+    }
+
+    if (dbType === 'Elasticsearch') {
+      return [
+        new TableGroupNode(this.connectionConfig, this.password, this.sshPassword, this.schemaName, this),
+        new ViewGroupNode(this.connectionConfig, this.password, this.sshPassword, this.schemaName, this),
+      ];
+    }
+
+    if (dbType === 'SQLite') {
+      return [
+        new TableGroupNode(this.connectionConfig, this.password, this.sshPassword, this.schemaName, this),
+        new ViewGroupNode(this.connectionConfig, this.password, this.sshPassword, this.schemaName, this),
+        new TriggerGroupNode(this.connectionConfig, this.password, this.sshPassword, this.schemaName, this),
+      ];
+    }
+
     return [
       new TableGroupNode(this.connectionConfig, this.password, this.sshPassword, this.schemaName, this),
       new ViewGroupNode(this.connectionConfig, this.password, this.sshPassword, this.schemaName, this),
