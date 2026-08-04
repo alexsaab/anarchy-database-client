@@ -10,5 +10,11 @@
   "command.runQuery": "Выполнить SQL-запрос",
   "command.copyTableName": "Копировать имя таблицы",
   "command.copyColumnName": "Копировать имя колонки",
-  "command.showTableDdl": "Показать DDL таблицы (CREATE TABLE)"
+  "command.showTableDdl": "Показать DDL таблицы (CREATE TABLE)",
+  "command.designTable": "Конструктор структуры таблицы",
+  "command.dumpDatabase": "Экспорт дампа SQL",
+  "command.importSql": "Импорт файла SQL",
+  "command.openErd": "Открыть ER-Диаграмму связей",
+  "command.processList": "Мониторинг процессов СУБД",
+  "command.generateMockData": "Сгенерировать тестовые данные"
 }

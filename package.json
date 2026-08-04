@@ -2,7 +2,7 @@
   "name": "vscode-database-client-clone",
   "displayName": "Anarchy Database Client",
   "description": "Полнофункциональный клиент баз данных для VS Code (клон cweijan.vscode-database-client2)",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "publisher": "custom-developer",
   "repository": {
     "type": "git",
@@ -86,6 +86,36 @@
         "command": "dbClient.showTableDdl",
         "title": "%command.showTableDdl%",
         "icon": "$(code)"
+      },
+      {
+        "command": "dbClient.designTable",
+        "title": "%command.designTable%",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "dbClient.dumpDatabase",
+        "title": "%command.dumpDatabase%",
+        "icon": "$(export)"
+      },
+      {
+        "command": "dbClient.importSql",
+        "title": "%command.importSql%",
+        "icon": "$(import)"
+      },
+      {
+        "command": "dbClient.openErd",
+        "title": "%command.openErd%",
+        "icon": "$(symbol-structure)"
+      },
+      {
+        "command": "dbClient.processList",
+        "title": "%command.processList%",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "dbClient.generateMockData",
+        "title": "%command.generateMockData%",
+        "icon": "$(sparkle)"
       }
     ],
     "menus": {
@@ -113,14 +143,19 @@
           "group": "1_navigation@1"
         },
         {
-          "command": "dbClient.showTableDdl",
+          "command": "dbClient.designTable",
           "when": "view == database-client-explorer && viewItem == tableNode",
           "group": "1_navigation@2"
         },
         {
-          "command": "dbClient.newQuery",
+          "command": "dbClient.showTableDdl",
           "when": "view == database-client-explorer && viewItem == tableNode",
           "group": "1_navigation@3"
+        },
+        {
+          "command": "dbClient.generateMockData",
+          "when": "view == database-client-explorer && viewItem == tableNode",
+          "group": "1_navigation@4"
         },
         {
           "command": "dbClient.copyTableName",
@@ -135,6 +170,28 @@
         },
 
         {
+          "command": "dbClient.openErd",
+          "when": "view == database-client-explorer && viewItem == databaseNode",
+          "group": "1_tools@1"
+        },
+
+        {
+          "command": "dbClient.processList",
+          "when": "view == database-client-explorer && viewItem == connectionNode",
+          "group": "1_tools@1"
+        },
+        {
+          "command": "dbClient.dumpDatabase",
+          "when": "view == database-client-explorer && (viewItem == connectionNode || viewItem == databaseNode)",
+          "group": "1_tools@2"
+        },
+        {
+          "command": "dbClient.importSql",
+          "when": "view == database-client-explorer && (viewItem == connectionNode || viewItem == databaseNode)",
+          "group": "1_tools@3"
+        },
+
+        {
           "command": "dbClient.editConnection",
           "when": "view == database-client-explorer && viewItem == connectionNode",
           "group": "inline@1"
@@ -142,7 +199,7 @@
         {
           "command": "dbClient.editConnection",
           "when": "view == database-client-explorer && viewItem == connectionNode",
-          "group": "1_modification@1"
+          "group": "2_modification@1"
         },
         {
           "command": "dbClient.newQuery",
@@ -152,7 +209,7 @@
         {
           "command": "dbClient.newQuery",
           "when": "view == database-client-explorer && (viewItem == connectionNode || viewItem == databaseNode)",
-          "group": "1_modification@2"
+          "group": "2_modification@2"
         },
         {
           "command": "dbClient.deleteConnection",
@@ -162,7 +219,7 @@
         {
           "command": "dbClient.deleteConnection",
           "when": "view == database-client-explorer && viewItem == connectionNode",
-          "group": "1_modification@3"
+          "group": "2_modification@3"
         }
       ],
       "editor/context": [

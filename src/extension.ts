@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ConnectionStorageService } from './storage/ConnectionStorage.js';
+import { QueryHistoryStorage } from './storage/QueryHistoryStorage.js';
 import { DatabaseTreeProvider } from './tree/DatabaseTreeProvider.js';
 import { ConnectionNode } from './tree/ConnectionNode.js';
 import { TableNode } from './tree/TableNode.js';
@@ -7,6 +8,11 @@ import { ColumnNode } from './tree/ColumnNode.js';
 import { DatabaseNode } from './tree/DatabaseNode.js';
 import { ConnectWebviewProvider } from './webview/ConnectWebviewProvider.js';
 import { TableWebviewProvider } from './webview/TableWebviewProvider.js';
+import { TableDesignWebviewProvider } from './webview/TableDesignWebviewProvider.js';
+import { ProcessListWebviewProvider } from './webview/ProcessListWebviewProvider.js';
+import { ErdWebviewProvider } from './webview/ErdWebviewProvider.js';
+import { DatabaseDumpService } from './dump/DatabaseDumpService.js';
+import { MockDataGenerator } from './mock/MockDataGenerator.js';
 import { SqlCompletionProvider } from './provider/SqlCompletionProvider.js';
 import { DriverManager } from './drivers/DriverManager.js';
 import { IconHelper } from './util/IconHelper.js';
@@ -19,6 +25,7 @@ export function activate(context: vscode.ExtensionContext) {
   IconHelper.setExtensionPath(context.extensionPath);
 
   const storageService = new ConnectionStorageService(context);
+  const historyStorage = new QueryHistoryStorage(context);
   const treeProvider = new DatabaseTreeProvider(storageService);
 
   // Register Tree View
@@ -85,6 +92,14 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.designTable', (node: TableNode) => {
+      if (node && node instanceof TableNode) {
+        TableDesignWebviewProvider.show(node);
+      }
+    })
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand('dbClient.copyTableName', (node: TableNode) => {
       if (node && node.table) {
         vscode.env.clipboard.writeText(node.table.name);
@@ -125,6 +140,52 @@ export function activate(context: vscode.ExtensionContext) {
         } catch (e: any) {
           vscode.window.showErrorMessage(`Failed to generate DDL: ${e.message}`);
         }
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.dumpDatabase', async (node: ConnectionNode | DatabaseNode) => {
+      if (node) {
+        const config = node.connectionConfig || (node as ConnectionNode).config;
+        const pass = (node as ConnectionNode).password;
+        const sshPass = (node as ConnectionNode).sshPassword;
+        await DatabaseDumpService.dumpDatabase(config, pass, sshPass);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.importSql', async (node: ConnectionNode | DatabaseNode) => {
+      if (node) {
+        const config = node.connectionConfig || (node as ConnectionNode).config;
+        const pass = (node as ConnectionNode).password;
+        const sshPass = (node as ConnectionNode).sshPassword;
+        await DatabaseDumpService.importSqlFile(config, pass, sshPass);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.openErd', async (node: DatabaseNode) => {
+      if (node) {
+        await ErdWebviewProvider.show(node.connectionConfig, node.password, node.sshPassword);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.processList', async (node: ConnectionNode) => {
+      if (node) {
+        await ProcessListWebviewProvider.show(node.config, node.password, node.sshPassword);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.generateMockData', async (node: TableNode) => {
+      if (node && node instanceof TableNode) {
+        await MockDataGenerator.generateForTable(node);
       }
     })
   );

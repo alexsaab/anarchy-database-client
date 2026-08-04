@@ -59,6 +59,50 @@ export class TableWebviewProvider {
           }
           await loadData();
           break;
+        case 'updateCell':
+          try {
+            const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
+            const valStr = msg.newValue === null ? 'NULL' : `'${String(msg.newValue).replace(/'/g, "''")}'`;
+            const pkCol = msg.pkColumn || 'id';
+            const pkValStr = typeof msg.pkValue === 'number' ? msg.pkValue : `'${msg.pkValue}'`;
+
+            const updateSql = `UPDATE "${schemaName}"."${tableName}" SET "${msg.columnName}" = ${valStr} WHERE "${pkCol}" = ${pkValStr};`;
+            await driver.executeQuery(updateSql);
+            vscode.window.showInformationMessage(t('Cell updated successfully!', 'Ячейка успешно обновлена!'));
+            await loadData();
+          } catch (e: any) {
+            vscode.window.showErrorMessage(`Update failed: ${e.message}`);
+          }
+          break;
+        case 'insertRow':
+          try {
+            const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
+            const keys = Object.keys(msg.rowData);
+            const colNames = keys.map((k) => `"${k}"`).join(', ');
+            const valStrings = keys.map((k) => (msg.rowData[k] === null ? 'NULL' : `'${String(msg.rowData[k]).replace(/'/g, "''")}'`)).join(', ');
+
+            const insertSql = `INSERT INTO "${schemaName}"."${tableName}" (${colNames}) VALUES (${valStrings});`;
+            await driver.executeQuery(insertSql);
+            vscode.window.showInformationMessage(t('Row inserted successfully!', 'Новая строка добавлена!'));
+            await loadData();
+          } catch (e: any) {
+            vscode.window.showErrorMessage(`Insert failed: ${e.message}`);
+          }
+          break;
+        case 'deleteRow':
+          try {
+            const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
+            const pkCol = msg.pkColumn || 'id';
+            const pkValStr = typeof msg.pkValue === 'number' ? msg.pkValue : `'${msg.pkValue}'`;
+
+            const deleteSql = `DELETE FROM "${schemaName}"."${tableName}" WHERE "${pkCol}" = ${pkValStr};`;
+            await driver.executeQuery(deleteSql);
+            vscode.window.showInformationMessage(t('Row deleted successfully!', 'Строка удалена!'));
+            await loadData();
+          } catch (e: any) {
+            vscode.window.showErrorMessage(`Delete failed: ${e.message}`);
+          }
+          break;
         case 'export':
           if (lastResult) {
             await ExportService.exportData(tableName, lastResult, msg.format);
@@ -116,6 +160,7 @@ export class TableWebviewProvider {
     const ru = isRussian();
     const text = {
       refresh: ru ? '🔄 Обновить' : '🔄 Refresh',
+      addRow: ru ? '➕ Добавить строку' : '➕ Add Row',
       page: ru ? 'Стр:' : 'Page:',
       export: ru ? 'Экспорт:' : 'Export:',
       stats: ru ? 'Всего строк' : 'Total rows',
@@ -161,10 +206,17 @@ export class TableWebviewProvider {
       background: var(--vscode-button-background);
       color: var(--vscode-button-foreground);
       border: none;
+      font-weight: bold;
     }
     button.secondary {
       background: var(--vscode-button-secondaryBackground);
       color: var(--vscode-button-secondaryForeground);
+    }
+    button.danger {
+      background: #dc2626;
+      color: white;
+      padding: 2px 6px;
+      font-size: 11px;
     }
     button:hover {
       background: var(--vscode-button-hoverBackground);
@@ -196,8 +248,9 @@ export class TableWebviewProvider {
       background: var(--vscode-editorHeader-noTabsBackground, #252526);
       font-weight: 600;
     }
-    tr:hover {
-      background-color: var(--vscode-list-hoverBackground, rgba(255,255,255,0.05));
+    td.editable:hover {
+      background-color: var(--vscode-list-hoverBackground, rgba(255,255,255,0.1));
+      cursor: pointer;
     }
     .info {
       margin-left: auto;
@@ -217,6 +270,8 @@ export class TableWebviewProvider {
 <body>
   <div class="toolbar">
     <button id="refreshBtn">${text.refresh}</button>
+    <button id="addRowBtn" class="secondary">${text.addRow}</button>
+
     <label>${text.page}</label>
     <button id="prevBtn">◀</button>
     <span id="pageInfo">1</span>
@@ -246,6 +301,7 @@ export class TableWebviewProvider {
     let currentPage = 1;
     let totalCount = 0;
     let pageSize = 50;
+    let currentFields = [];
 
     function exportData(format) {
       vscode.postMessage({ type: 'export', format });
@@ -253,6 +309,18 @@ export class TableWebviewProvider {
 
     document.getElementById('refreshBtn').onclick = () => {
       vscode.postMessage({ type: 'fetchData', params: { page: currentPage } });
+    };
+
+    document.getElementById('addRowBtn').onclick = () => {
+      if (currentFields.length === 0) return;
+      const rowData = {};
+      currentFields.forEach(f => {
+        const val = prompt('Enter value for column "' + f.name + '":');
+        if (val !== null) rowData[f.name] = val;
+      });
+      if (Object.keys(rowData).length > 0) {
+        vscode.postMessage({ type: 'insertRow', rowData });
+      }
     };
 
     document.getElementById('prevBtn').onclick = () => {
@@ -269,6 +337,19 @@ export class TableWebviewProvider {
       }
     };
 
+    function editCell(colName, pkCol, pkVal, currentVal) {
+      const newVal = prompt('Edit value for "' + colName + '":', currentVal === 'null' ? '' : currentVal);
+      if (newVal !== null && newVal !== currentVal) {
+        vscode.postMessage({ type: 'updateCell', columnName: colName, pkColumn: pkCol, pkValue: pkVal, newValue: newVal });
+      }
+    }
+
+    function deleteRow(pkCol, pkVal) {
+      if (confirm('Delete row with ' + pkCol + ' = ' + pkVal + '?')) {
+        vscode.postMessage({ type: 'deleteRow', pkColumn: pkCol, pkValue: pkVal });
+      }
+    }
+
     window.addEventListener('message', event => {
       const msg = event.data;
       const errorBox = document.getElementById('errorBox');
@@ -284,22 +365,25 @@ export class TableWebviewProvider {
         const res = msg.result;
         totalCount = res.totalCount || 0;
         currentPage = msg.params.page;
+        currentFields = res.fields;
 
         document.getElementById('pageInfo').innerText = currentPage + ' / ' + Math.max(1, Math.ceil(totalCount / pageSize));
         document.getElementById('stats').innerText = \`${text.stats}: \${totalCount} | ${text.time}: \${res.costTimeMs}ms\`;
 
-        // Render Head
         const headTr = document.getElementById('tableHead');
-        headTr.innerHTML = '<th>#</th>' + res.fields.map(f => \`<th>\${f.name}</th>\`).join('');
+        headTr.innerHTML = '<th>#</th>' + res.fields.map(f => \`<th>\${f.name}</th>\`).join('') + '<th>Action</th>';
 
-        // Render Body
+        const pkField = res.fields.find(f => f.isPrimaryKey) || res.fields[0];
+
         const body = document.getElementById('tableBody');
         body.innerHTML = res.rows.map((row, idx) => {
+          const pkVal = pkField ? row[pkField.name] : idx;
           const cells = res.fields.map(f => {
             const val = row[f.name];
-            return \`<td>\${val === null ? '<i>null</i>' : String(val)}</td>\`;
+            const valStr = val === null ? 'null' : String(val);
+            return \`<td class="editable" onclick="editCell('\${f.name}', '\${pkField ? pkField.name : ''}', '\${pkVal}', '\${valStr}')">\${val === null ? '<i>null</i>' : valStr}</td>\`;
           }).join('');
-          return \`<tr><td>\${(currentPage - 1) * pageSize + idx + 1}</td>\${cells}</tr>\`;
+          return \`<tr><td>\${(currentPage - 1) * pageSize + idx + 1}</td>\${cells}<td><button class="danger" onclick="deleteRow('\${pkField ? pkField.name : ''}', '\${pkVal}')">🗑️</button></td></tr>\`;
         }).join('');
       }
     });
@@ -463,7 +547,8 @@ export class TableWebviewProvider {
         const headTr = document.getElementById('resHead');
         headTr.innerHTML = res.fields.map(f => \`<th>\${f.name}</th>\`).join('');
 
-        const body = document.innerHTML = res.rows.map(r => {
+        const body = document.getElementById('resBody');
+        body.innerHTML = res.rows.map(r => {
           const cells = res.fields.map(f => \`<td>\${r[f.name] === null ? '<i>null</i>' : String(r[f.name])}</td>\`).join('');
           return \`<tr>\${cells}</tr>\`;
         }).join('');

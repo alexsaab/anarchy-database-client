@@ -10,5 +10,11 @@
   "command.runQuery": "Run SQL Query",
   "command.copyTableName": "Copy Table Name",
   "command.copyColumnName": "Copy Column Name",
-  "command.showTableDdl": "Show Table DDL (CREATE TABLE)"
+  "command.showTableDdl": "Show Table DDL (CREATE TABLE)",
+  "command.designTable": "Design Table Structure",
+  "command.dumpDatabase": "Export SQL Dump",
+  "command.importSql": "Import SQL File",
+  "command.openErd": "Open ER Diagram",
+  "command.processList": "Process List & Threads",
+  "command.generateMockData": "Generate Mock Data"
 }
