@@ -5,7 +5,7 @@ import { ConnectionNode } from './tree/ConnectionNode.js';
 import { DatabaseNode } from './tree/DatabaseNode.js';
 import { TableNode } from './tree/TableNode.js';
 import { ConnectWebviewProvider } from './webview/ConnectWebviewProvider.js';
-import { TableWebviewProvider } from './webview/TableWebviewProvider.ts';
+import { TableWebviewProvider } from './webview/TableWebviewProvider.js';
 import { TableDesignWebviewProvider } from './webview/TableDesignWebviewProvider.js';
 import { ErdWebviewProvider } from './webview/ErdWebviewProvider.js';
 import { ProcessListWebviewProvider } from './webview/ProcessListWebviewProvider.js';
@@ -22,7 +22,7 @@ export function activate(context: vscode.ExtensionContext) {
   const storageService = new ConnectionStorageService(context);
   const treeProvider = new DatabaseTreeProvider(storageService);
 
-  vscode.window.registerTreeDataProvider('dbClientView', treeProvider);
+  vscode.window.registerTreeDataProvider('database-client-explorer', treeProvider);
 
   context.subscriptions.push(
     vscode.commands.registerCommand('dbClient.addConnection', () => {
