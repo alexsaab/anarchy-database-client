@@ -178,6 +178,7 @@ export class TableDesignWebviewProvider {
       drop: ru ? '🗑️ Удалить' : '🗑️ Drop',
       save: ru ? 'Сохранить' : 'Save',
       cancel: ru ? 'Отмена' : 'Cancel',
+      lengthPh: ru ? 'Длина/Размер (например, 255 или 10,2)' : 'Length/Size (e.g. 255 or 10,2)',
     };
 
     return `<!DOCTYPE html>
@@ -297,6 +298,10 @@ export class TableDesignWebviewProvider {
       margin-top: 20px;
       justify-content: flex-end;
     }
+    .type-row {
+      display: flex;
+      gap: 10px;
+    }
   </style>
 </head>
 <body>
@@ -355,6 +360,30 @@ export class TableDesignWebviewProvider {
     let currentTableComment = '';
     let globalColumns = [];
 
+    const TYPE_OPTIONS = [
+      'VARCHAR', 'CHAR', 'TEXT', 'LONGTEXT',
+      'INTEGER', 'BIGINT', 'SMALLINT', 'TINYINT', 'BOOLEAN',
+      'DECIMAL', 'FLOAT', 'DOUBLE',
+      'DATETIME', 'TIMESTAMP', 'DATE', 'JSON'
+    ];
+
+    function parseColumnType(fullType) {
+      if (!fullType) return { baseType: 'VARCHAR', length: '255' };
+      const raw = fullType.trim();
+      const match = raw.match(/^([a-zA-Z\s]+)(?:\(([^)]+)\))?(.*)$/);
+
+      if (match) {
+        let base = match[1].trim().toUpperCase();
+        let len = match[2] ? match[2].trim() : '';
+        let rest = match[3] ? match[3].trim() : '';
+
+        // Match against standard list or default
+        const matchedType = TYPE_OPTIONS.find(t => base.includes(t)) || base;
+        return { baseType: matchedType, length: len, extra: rest };
+      }
+      return { baseType: 'VARCHAR', length: '255', extra: '' };
+    }
+
     function openModal(title, bodyHtml, onConfirm) {
       document.getElementById('modalTitle').innerText = title;
       document.getElementById('modalBody').innerHTML = bodyHtml;
@@ -398,22 +427,41 @@ export class TableDesignWebviewProvider {
       const c = globalColumns[colIndex];
       if (!c) return;
 
+      const parsed = parseColumnType(c.type);
+
+      const typeOptionsHtml = TYPE_OPTIONS.map(t => \`
+        <option value="\${t}" \${t === parsed.baseType ? 'selected' : ''}>\${t}</option>
+      \`).join('');
+
       const html = \`
         <div class="modal-form-group">
           <label>Column Name:</label>
           <input type="text" id="editColName" value="\${c.name.replace(/"/g, '&quot;')}" style="width:100%;">
         </div>
         <div class="modal-form-group">
-          <label>Data Type:</label>
-          <input type="text" id="editColType" value="\${c.type.replace(/"/g, '&quot;')}" style="width:100%;">
+          <label>Data Type & Length:</label>
+          <div class="type-row">
+            <select id="editColTypeSelect" style="flex:1;">\${typeOptionsHtml}</select>
+            <input type="text" id="editColLength" value="\${parsed.length || ''}" placeholder="${text.lengthPh}" style="flex:1;">
+          </div>
         </div>
       \`;
 
       openModal('${ru ? 'Редактировать колонку' : 'Edit Column'}: ' + c.name, html, () => {
         const newName = document.getElementById('editColName').value;
-        const newType = document.getElementById('editColType').value;
-        if (newName && newType) {
-          vscode.postMessage({ type: 'editColumn', oldName: c.name, newName, newType });
+        const selectedType = document.getElementById('editColTypeSelect').value;
+        const lengthVal = document.getElementById('editColLength').value.trim();
+
+        let finalType = selectedType;
+        if (lengthVal) {
+          finalType += '(' + lengthVal + ')';
+        }
+        if (parsed.extra) {
+          finalType += ' ' + parsed.extra;
+        }
+
+        if (newName && finalType) {
+          vscode.postMessage({ type: 'editColumn', oldName: c.name, newName, newType: finalType });
         }
       });
     }
