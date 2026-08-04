@@ -1,37 +1,48 @@
 import * as net from 'net';
 import * as fs from 'fs';
-import { Client, ConnectConfig } from 'ssh2';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 
 export interface SshTunnelResult {
+  server: net.Server;
   localPort: number;
-  close: () => void;
 }
 
 export class SshTunnelManager {
-  public static async createTunnel(
-    config: ConnectionConfig,
-    sshPassword?: string
-  ): Promise<SshTunnelResult> {
-    if (!config.ssh || !config.ssh.enabled) {
-      throw new Error('SSH is not enabled in configuration');
+  public static async createTunnel(config: ConnectionConfig, sshPassword?: string): Promise<SshTunnelResult> {
+    let ssh2: any;
+    try {
+      ssh2 = require('ssh2');
+    } catch (e) {
+      throw new Error('ssh2 module is not available in this environment.');
     }
 
-    const sshClient = new Client();
+    if (!config.ssh || !config.ssh.enabled) {
+      throw new Error('SSH is not enabled for this connection');
+    }
+
+    const sshHost = config.ssh.host;
+    const sshPort = config.ssh.port || 22;
+    const sshUser = config.ssh.username;
+
+    if (!sshHost || !sshUser) {
+      throw new Error('SSH Host and Username are required');
+    }
 
     return new Promise((resolve, reject) => {
-      const server = net.createServer((socket) => {
+      const sshClient = new ssh2.Client();
+
+      const server = net.createServer((localSocket) => {
         sshClient.forwardOut(
           '127.0.0.1',
-          socket.remotePort || 0,
-          config.host || '127.0.0.1',
+          localSocket.remotePort || 0,
+          config.host || 'localhost',
           config.port || 3306,
           (err, stream) => {
             if (err) {
-              socket.end();
+              localSocket.destroy();
               return;
             }
-            socket.pipe(stream).pipe(socket);
+            localSocket.pipe(stream).pipe(localSocket);
           }
         );
       });
@@ -40,48 +51,43 @@ export class SshTunnelManager {
         const address = server.address() as net.AddressInfo;
         const localPort = address.port;
 
-        const sshConnectOpts: ConnectConfig = {
-          host: config.ssh?.host || '',
-          port: config.ssh?.port || 22,
-          username: config.ssh?.username || '',
-          readyTimeout: 20000,
-          keepaliveInterval: 10000,
+        const connectConfig: any = {
+          host: sshHost,
+          port: sshPort,
+          username: sshUser,
         };
 
-        if (config.ssh?.usePrivateKey && config.ssh.privateKeyPath) {
+        if (config.ssh?.usePrivateKey && config.ssh?.privateKeyPath) {
           try {
-            sshConnectOpts.privateKey = fs.readFileSync(config.ssh.privateKeyPath);
-            if (sshPassword) {
-              sshConnectOpts.passphrase = sshPassword;
-            }
+            connectConfig.privateKey = fs.readFileSync(config.ssh.privateKeyPath);
           } catch (e: any) {
             server.close();
-            return reject(new Error(`Failed to read SSH Private Key at "${config.ssh.privateKeyPath}": ${e.message}`));
+            return reject(new Error(`Failed to read private key file: ${e.message}`));
           }
-        } else {
-          sshConnectOpts.password = sshPassword || '';
-          sshConnectOpts.tryKeyboard = true;
+        } else if (sshPassword) {
+          connectConfig.password = sshPassword;
         }
 
         sshClient
-          .on('keyboard-interactive', (name, instructions, instructionsLang, prompts, finish) => {
-            finish([sshPassword || '']);
-          })
           .on('ready', () => {
-            resolve({
-              localPort,
-              close: () => {
-                server.close();
-                sshClient.end();
-              },
-            });
+            resolve({ server, localPort });
           })
           .on('error', (err) => {
             server.close();
-            reject(new Error(`SSH Tunnel Error: ${err.message}`));
+            reject(new Error(`SSH Tunnel connection error: ${err.message}`));
           })
-          .connect(sshConnectOpts);
+          .connect(connectConfig);
       });
+
+      server.on('error', (err) => {
+        reject(err);
+      });
+    });
+  }
+
+  public static async closeTunnel(result: SshTunnelResult): Promise<void> {
+    return new Promise((resolve) => {
+      result.server.close(() => resolve());
     });
   }
 }
