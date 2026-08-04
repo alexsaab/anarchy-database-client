@@ -4,6 +4,11 @@ import { DatabaseTreeProvider } from './tree/DatabaseTreeProvider.js';
 import { ConnectionNode } from './tree/ConnectionNode.js';
 import { DatabaseNode } from './tree/DatabaseNode.js';
 import { TableNode } from './tree/TableNode.js';
+import { TableGroupNode } from './tree/TableGroupNode.js';
+import { ViewGroupNode } from './tree/ViewGroupNode.js';
+import { FunctionGroupNode } from './tree/FunctionGroupNode.js';
+import { ProcedureGroupNode } from './tree/ProcedureGroupNode.js';
+import { TriggerGroupNode } from './tree/TriggerGroupNode.js';
 import { ConnectWebviewProvider } from './webview/ConnectWebviewProvider.js';
 import { TableWebviewProvider } from './webview/TableWebviewProvider.js';
 import { TableDesignWebviewProvider } from './webview/TableDesignWebviewProvider.js';
@@ -22,7 +27,7 @@ export function activate(context: vscode.ExtensionContext) {
   const storageService = new ConnectionStorageService(context);
   const treeProvider = new DatabaseTreeProvider(storageService);
 
-  // Register all tree view IDs to prevent any extension ID conflict
+  // Register tree view IDs
   vscode.window.registerTreeDataProvider('database-client-explorer', treeProvider);
   vscode.window.registerTreeDataProvider('dbClientView', treeProvider);
   vscode.window.registerTreeDataProvider('anarchy-database-client-explorer', treeProvider);
@@ -103,6 +108,47 @@ export function activate(context: vscode.ExtensionContext) {
           vscode.window.showErrorMessage(`Failed to open DDL script: ${e.message}`);
         }
       }
+    })
+  );
+
+  // Object Template Creation Commands
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.createTable', async (node?: TableGroupNode) => {
+      const template = `-- Create Table Template\nCREATE TABLE \`new_table\` (\n  \`id\` BIGINT NOT NULL AUTO_INCREMENT,\n  \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n  PRIMARY KEY (\`id\`)\n);`;
+      const doc = await vscode.workspace.openTextDocument({ language: 'sql', content: template });
+      await vscode.window.showTextDocument(doc);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.createView', async (node?: ViewGroupNode) => {
+      const template = `-- Create View Template\nCREATE VIEW \`new_view\` AS\nSELECT * FROM \`tableName\`;`;
+      const doc = await vscode.workspace.openTextDocument({ language: 'sql', content: template });
+      await vscode.window.showTextDocument(doc);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.createFunction', async (node?: FunctionGroupNode) => {
+      const template = `-- Create Function Template\nDELIMITER //\nCREATE FUNCTION \`new_function\` (param1 INT)\nRETURNS INT\nDETERMINISTIC\nBEGIN\n  RETURN param1 * 2;\nEND //\nDELIMITER ;`;
+      const doc = await vscode.workspace.openTextDocument({ language: 'sql', content: template });
+      await vscode.window.showTextDocument(doc);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.createProcedure', async (node?: ProcedureGroupNode) => {
+      const template = `-- Create Procedure Template\nDELIMITER //\nCREATE PROCEDURE \`new_procedure\` (IN param1 INT)\nBEGIN\n  SELECT * FROM \`tableName\` WHERE \`id\` = param1;\nEND //\nDELIMITER ;`;
+      const doc = await vscode.workspace.openTextDocument({ language: 'sql', content: template });
+      await vscode.window.showTextDocument(doc);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.createTrigger', async (node?: TriggerGroupNode) => {
+      const template = `-- Create Trigger Template\nCREATE TRIGGER \`new_trigger\`\nBEFORE INSERT ON \`tableName\`\nFOR EACH ROW\nBEGIN\n  -- Trigger logic\nEND;`;
+      const doc = await vscode.workspace.openTextDocument({ language: 'sql', content: template });
+      await vscode.window.showTextDocument(doc);
     })
   );
 
