@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import { DriverManager } from '../drivers/DriverManager.js';
 import { TableNode } from '../tree/TableNode.js';
-import { ColumnInfo } from '../model/QueryTypes.js';
 import { isRussian, t } from '../util/i18n.js';
 
 export class TableDesignWebviewProvider {
@@ -38,10 +37,27 @@ export class TableDesignWebviewProvider {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
             const sql = `ALTER TABLE "${tableName}" ADD COLUMN "${msg.col.name}" ${msg.col.type}${msg.col.nullable ? '' : ' NOT NULL'};`;
             await driver.executeQuery(sql);
-            vscode.window.showInformationMessage(t(`Added column "${msg.col.name}"`, `Колонка "${msg.col.name}" успешно добавлена`));
+            vscode.window.showInformationMessage(t(`Added column "${msg.col.name}"`, `Колонка "${msg.col.name}" добавлена`));
             await loadColumns();
           } catch (e: any) {
             vscode.window.showErrorMessage(`Failed to add column: ${e.message}`);
+          }
+          break;
+        }
+        case 'editColumn': {
+          try {
+            const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
+            let alterSql = '';
+            if (connectionConfig.type === 'PostgreSQL') {
+              alterSql = `ALTER TABLE "${tableName}" RENAME COLUMN "${msg.oldName}" TO "${msg.newName}";\nALTER TABLE "${tableName}" ALTER COLUMN "${msg.newName}" TYPE ${msg.newType};`;
+            } else {
+              alterSql = `ALTER TABLE \`${tableName}\` CHANGE \`${msg.oldName}\` \`${msg.newName}\` ${msg.newType};`;
+            }
+            await driver.executeQuery(alterSql);
+            vscode.window.showInformationMessage(t(`Updated column "${msg.newName}"`, `Колонка "${msg.newName}" обновлена`));
+            await loadColumns();
+          } catch (e: any) {
+            vscode.window.showErrorMessage(`Failed to edit column: ${e.message}`);
           }
           break;
         }
@@ -67,13 +83,14 @@ export class TableDesignWebviewProvider {
   private static getHtml(tableName: string): string {
     const ru = isRussian();
     const text = {
-      title: ru ? '🛠 Конструктор Таблицы' : '🛠 Table Structure Designer',
+      title: ru ? '🛠 Конструктор Таблицы (Редактирование Колонок)' : '🛠 Table Designer & Column Editor',
       addCol: ru ? '➕ Добавить Колонку' : '➕ Add Column',
       colName: ru ? 'Имя колонки' : 'Column Name',
       colType: ru ? 'Тип данных' : 'Data Type',
       nullable: ru ? 'NULLABLE' : 'NULLABLE',
       pk: ru ? 'PRIMARY KEY' : 'PRIMARY KEY',
       actions: ru ? 'Действия' : 'Actions',
+      edit: ru ? '✏️ Изменить' : '✏️ Edit',
       drop: ru ? '🗑️ Удалить' : '🗑️ Drop',
     };
 
@@ -97,6 +114,7 @@ export class TableDesignWebviewProvider {
       background: var(--vscode-sideBar-background);
       padding: 10px;
       border-radius: 4px;
+      align-items: center;
     }
     input, select, button {
       padding: 6px 10px;
@@ -111,6 +129,10 @@ export class TableDesignWebviewProvider {
       color: var(--vscode-button-foreground);
       border: none;
       font-weight: bold;
+    }
+    button.secondary {
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
     }
     button.danger {
       background: #dc2626;
@@ -174,6 +196,15 @@ export class TableDesignWebviewProvider {
       vscode.postMessage({ type: 'addColumn', col: { name, type, nullable } });
     };
 
+    function editCol(oldName, oldType) {
+      const newName = prompt('Enter new column name:', oldName);
+      if (!newName) return;
+      const newType = prompt('Enter data type (e.g. VARCHAR(255), INT, TEXT):', oldType);
+      if (!newType) return;
+
+      vscode.postMessage({ type: 'editColumn', oldName, newName, newType });
+    }
+
     function dropCol(colName) {
       if (confirm('Drop column "' + colName + '"?')) {
         vscode.postMessage({ type: 'dropColumn', columnName: colName });
@@ -190,7 +221,10 @@ export class TableDesignWebviewProvider {
             <td>\${c.type}</td>
             <td>\${c.nullable ? 'YES' : 'NO'}</td>
             <td>\${c.isPrimaryKey ? '🔑 YES' : 'NO'}</td>
-            <td><button class="danger" onclick="dropCol('\${c.name}')">${text.drop}</button></td>
+            <td>
+              <button class="secondary" onclick="editCol('\${c.name}', '\${c.type}')">${text.edit}</button>
+              <button class="danger" onclick="dropCol('\${c.name}')">${text.drop}</button>
+            </td>
           </tr>
         \`).join('');
       }

@@ -1,6 +1,12 @@
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { ColumnInfo, QueryResult, TableInfo, PageParams } from '../model/QueryTypes.js';
 
+export interface ForeignKeyInfo {
+  columnName: string;
+  foreignTableName: string;
+  foreignColumnName: string;
+}
+
 export abstract class BaseDriver {
   protected config: ConnectionConfig;
   protected password?: string;
@@ -21,6 +27,10 @@ export abstract class BaseDriver {
   }
   abstract getTables(databaseName?: string, schemaName?: string): Promise<TableInfo[]>;
   abstract getColumns(tableName: string, databaseName?: string, schemaName?: string): Promise<ColumnInfo[]>;
+
+  async getForeignKeys(tableName: string, databaseName?: string, schemaName?: string): Promise<ForeignKeyInfo[]> {
+    return [];
+  }
   
   abstract executeQuery(sql: string): Promise<QueryResult>;
   abstract getTableData(tableName: string, params: PageParams, schemaName?: string): Promise<QueryResult>;

@@ -1,5 +1,5 @@
 import mysql from 'mysql2/promise';
-import { BaseDriver } from './BaseDriver.js';
+import { BaseDriver, ForeignKeyInfo } from './BaseDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
 
@@ -10,23 +10,19 @@ export class MysqlDriver extends BaseDriver {
     super(config, password);
   }
 
-  private async getClient(databaseName?: string): Promise<mysql.Connection> {
-    return await mysql.createConnection({
-      host: this.config.host || 'localhost',
-      port: this.config.port || 3306,
-      user: this.config.user || 'root',
-      password: this.password || '',
-      database: databaseName || this.config.database,
-      ssl: this.config.ssl ? { rejectUnauthorized: false } : undefined,
-      connectTimeout: 5000,
-    });
-  }
-
   async connect(): Promise<void> {
     if (this.connection) {
       await this.disconnect();
     }
-    this.connection = await this.getClient();
+    this.connection = await mysql.createConnection({
+      host: this.config.host || 'localhost',
+      port: this.config.port || 3306,
+      user: this.config.user || 'root',
+      password: this.password || '',
+      database: this.config.database || undefined,
+      ssl: this.config.ssl ? { rejectUnauthorized: false } : undefined,
+      connectTimeout: 5000,
+    });
     this.isConnected = true;
   }
 
@@ -34,7 +30,9 @@ export class MysqlDriver extends BaseDriver {
     if (this.connection) {
       try {
         await this.connection.end();
-      } catch (e) {}
+      } catch (e) {
+        // Ignore disconnect errors
+      }
       this.connection = null;
       this.isConnected = false;
     }
@@ -42,7 +40,15 @@ export class MysqlDriver extends BaseDriver {
 
   async testConnection(): Promise<{ success: boolean; message?: string }> {
     try {
-      const conn = await this.getClient();
+      const conn = await mysql.createConnection({
+        host: this.config.host || 'localhost',
+        port: this.config.port || 3306,
+        user: this.config.user || 'root',
+        password: this.password || '',
+        database: this.config.database || undefined,
+        ssl: this.config.ssl ? { rejectUnauthorized: false } : undefined,
+        connectTimeout: 5000,
+      });
       await conn.query('SELECT 1');
       await conn.end();
       return { success: true, message: 'Successfully connected to MySQL database!' };
@@ -52,39 +58,61 @@ export class MysqlDriver extends BaseDriver {
   }
 
   async getDatabases(): Promise<string[]> {
-    const res = await this.executeQuery('SHOW DATABASES;');
-    return res.rows.map((r) => Object.values(r)[0] as string);
+    const res = await this.executeQuery("SHOW DATABASES WHERE `Database` NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys');");
+    return res.rows.map((r) => r.Database);
   }
 
   async getTables(databaseName?: string): Promise<TableInfo[]> {
-    const db = databaseName || this.config.database;
-    const sql = db ? `SHOW FULL TABLES FROM \`${db}\`;` : 'SHOW FULL TABLES;';
-    const res = await this.executeQuery(sql);
+    if (databaseName) {
+      await this.executeQuery(`USE \`${databaseName}\`;`);
+    }
+    const res = await this.executeQuery('SHOW FULL TABLES;');
     return res.rows.map((r) => {
-      const vals = Object.values(r);
+      const keys = Object.keys(r);
+      const tableName = r[keys[0]];
+      const tableType = r[keys[1]];
       return {
-        name: vals[0] as string,
-        type: vals[1] === 'VIEW' ? 'view' : 'table',
+        name: tableName,
+        type: tableType === 'VIEW' ? 'view' : 'table',
       };
     });
   }
 
   async getColumns(tableName: string, databaseName?: string): Promise<ColumnInfo[]> {
-    const db = databaseName || this.config.database;
-    const sql = `
-      SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT
-      FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = '${db}' AND TABLE_NAME = '${tableName}'
-      ORDER BY ORDINAL_POSITION ASC;
-    `;
-    const res = await this.executeQuery(sql);
+    if (databaseName) {
+      await this.executeQuery(`USE \`${databaseName}\`;`);
+    }
+    const res = await this.executeQuery(`DESCRIBE \`${tableName}\`;`);
     return res.rows.map((r) => ({
-      name: r.COLUMN_NAME,
-      type: r.DATA_TYPE,
-      nullable: r.IS_NULLABLE === 'YES',
-      isPrimaryKey: r.COLUMN_KEY === 'PRI',
-      defaultValue: r.COLUMN_DEFAULT,
+      name: r.Field,
+      type: r.Type,
+      nullable: r.Null === 'YES',
+      isPrimaryKey: r.Key === 'PRI',
+      defaultValue: r.Default,
     }));
+  }
+
+  async getForeignKeys(tableName: string, databaseName?: string): Promise<ForeignKeyInfo[]> {
+    const db = databaseName || this.config.database;
+    if (!db) return [];
+    const sql = `
+      SELECT 
+        column_name, 
+        referenced_table_name AS foreign_table_name, 
+        referenced_column_name AS foreign_column_name
+      FROM information_schema.key_column_usage
+      WHERE table_schema = '${db}' AND table_name = '${tableName}' AND referenced_table_name IS NOT NULL;
+    `;
+    try {
+      const res = await this.executeQuery(sql);
+      return res.rows.map((r) => ({
+        columnName: r.column_name,
+        foreignTableName: r.foreign_table_name,
+        foreignColumnName: r.foreign_column_name,
+      }));
+    } catch (e) {
+      return [];
+    }
   }
 
   async executeQuery(sql: string): Promise<QueryResult> {
@@ -95,23 +123,24 @@ export class MysqlDriver extends BaseDriver {
     const [rows, fields] = await this.connection!.query(sql);
     const costTimeMs = Date.now() - startTime;
 
-    const columnInfos: ColumnInfo[] = Array.isArray(fields)
-      ? fields.map((f: any) => ({
-          name: f.name,
-          type: 'unknown',
-          nullable: true,
-        }))
-      : [];
+    const columnFields: ColumnInfo[] = (fields || []).map((f) => ({
+      name: f.name,
+      type: 'unknown',
+      nullable: true,
+    }));
+
+    const resultRows = Array.isArray(rows) ? rows : [];
+    const affected = (rows as mysql.ResultSetHeader).affectedRows || 0;
 
     return {
-      rows: Array.isArray(rows) ? (rows as Record<string, any>[]) : [],
-      fields: columnInfos,
-      affectedRows: (rows as any)?.affectedRows || (Array.isArray(rows) ? rows.length : 0),
+      rows: resultRows,
+      fields: columnFields,
+      affectedRows: affected,
       costTimeMs,
     };
   }
 
-  async getTableData(tableName: string, params: PageParams): Promise<QueryResult> {
+  async getTableData(tableName: string, params: PageParams, schemaName?: string): Promise<QueryResult> {
     const offset = (params.page - 1) * params.pageSize;
     let sql = `SELECT * FROM \`${tableName}\``;
 
@@ -125,9 +154,9 @@ export class MysqlDriver extends BaseDriver {
 
     sql += ` LIMIT ${params.pageSize} OFFSET ${offset};`;
 
-    const countSql = `SELECT COUNT(*) as total FROM \`${tableName}\`;`;
+    const countSql = `SELECT COUNT(*) as total FROM \`${tableName}\``;
     const countRes = await this.executeQuery(countSql);
-    const totalCount = parseInt(Object.values(countRes.rows[0] || {})[0] as string || '0', 10);
+    const totalCount = parseInt(countRes.rows[0]?.total || '0', 10);
 
     const queryResult = await this.executeQuery(sql);
     queryResult.totalCount = totalCount;
