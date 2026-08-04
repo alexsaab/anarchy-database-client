@@ -83,7 +83,7 @@ export class TableWebviewProvider {
         case 'updateCell':
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
-            const valStr = msg.newValue === null ? 'NULL' : `'${String(msg.newValue).replace(/'/g, "''")}'`;
+            const valStr = (msg.newValue === null || msg.isNull) ? 'NULL' : `'${String(msg.newValue).replace(/'/g, "''")}'`;
             const pkCol = TableWebviewProvider.quoteId(dbType, msg.pkColumn || 'id');
             const targetCol = TableWebviewProvider.quoteId(dbType, msg.columnName);
             const pkValStr = typeof msg.pkValue === 'number' ? msg.pkValue : `'${msg.pkValue}'`;
@@ -101,7 +101,11 @@ export class TableWebviewProvider {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
             const keys = Object.keys(msg.rowData);
             const colNames = keys.map((k) => TableWebviewProvider.quoteId(dbType, k)).join(', ');
-            const valStrings = keys.map((k) => (msg.rowData[k] === null || msg.rowData[k] === '' ? 'NULL' : `'${String(msg.rowData[k]).replace(/'/g, "''")}'`)).join(', ');
+            const valStrings = keys.map((k) => {
+              const val = msg.rowData[k];
+              if (val === null || val === 'NULL' || val === undefined) return 'NULL';
+              return `'${String(val).replace(/'/g, "''")}'`;
+            }).join(', ');
 
             const insertSql = `INSERT INTO ${tableRef} (${colNames}) VALUES (${valStrings});`;
             await driver.executeQuery(insertSql);
@@ -193,6 +197,7 @@ export class TableWebviewProvider {
       err: ru ? '❌ Ошибка:' : '❌ Error:',
       save: ru ? 'Сохранить' : 'Save',
       cancel: ru ? 'Отмена' : 'Cancel',
+      setNull: ru ? 'Установить NULL' : 'Set as NULL',
     };
 
     return `<!DOCTYPE html>
@@ -429,15 +434,23 @@ export class TableWebviewProvider {
       let fieldsHtml = currentFields.map(f => \`
         <div class="modal-form-group">
           <label>\${f.name} (\${f.type})</label>
-          <input type="text" id="add_col_\${f.name}" placeholder="Value..." style="width:100%;">
+          <div style="display:flex; gap:10px; align-items:center;">
+            <input type="text" id="add_col_\${f.name}" placeholder="Value..." style="flex:1;">
+            <label style="font-weight:normal; font-size:11px;"><input type="checkbox" id="add_null_\${f.name}" onchange="document.getElementById('add_col_\${f.name}').disabled = this.checked;"> NULL</label>
+          </div>
         </div>
       \`).join('');
 
       openModal('${text.addRow}', fieldsHtml, () => {
         const rowData = {};
         currentFields.forEach(f => {
+          const isNullChecked = document.getElementById('add_null_' + f.name).checked;
           const val = document.getElementById('add_col_' + f.name).value;
-          if (val !== '') rowData[f.name] = val;
+          if (isNullChecked) {
+            rowData[f.name] = null;
+          } else if (val !== '') {
+            rowData[f.name] = val;
+          }
         });
         vscode.postMessage({ type: 'insertRow', rowData });
       });
@@ -458,16 +471,21 @@ export class TableWebviewProvider {
     };
 
     function editCell(colName, pkCol, pkVal, currentVal) {
+      const isNull = currentVal === 'null';
       const html = \`
         <div class="modal-form-group">
           <label>Value for "\${colName}":</label>
-          <textarea id="cellValInput" style="width:100%; height:80px;">\${currentVal === 'null' ? '' : currentVal}</textarea>
+          <textarea id="cellValInput" style="width:100%; height:80px;" \${isNull ? 'disabled' : ''}>\${isNull ? '' : currentVal}</textarea>
+          <div style="margin-top:6px;">
+            <label style="font-size:12px; font-weight:normal;"><input type="checkbox" id="cellSetNullCheckbox" \${isNull ? 'checked' : ''} onchange="document.getElementById('cellValInput').disabled = this.checked;"> ${text.setNull}</label>
+          </div>
         </div>
       \`;
 
       openModal('${ru ? 'Редактировать ячейку' : 'Edit Cell'}: ' + colName, html, () => {
+        const setNull = document.getElementById('cellSetNullCheckbox').checked;
         const newVal = document.getElementById('cellValInput').value;
-        vscode.postMessage({ type: 'updateCell', columnName: colName, pkColumn: pkCol, pkValue: pkVal, newValue: newVal });
+        vscode.postMessage({ type: 'updateCell', columnName: colName, pkColumn: pkCol, pkValue: pkVal, newValue: setNull ? null : newVal, isNull: setNull });
       });
     }
 
