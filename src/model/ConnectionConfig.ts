@@ -1,4 +1,14 @@
-export type DatabaseType = 'PostgreSQL' | 'MySQL' | 'SQLite' | 'Redis' | 'MongoDB' | 'Elasticsearch' | 'ClickHouse';
+export type DatabaseType =
+  | 'PostgreSQL'
+  | 'MySQL'
+  | 'SQLite'
+  | 'Redis'
+  | 'MongoDB'
+  | 'Elasticsearch'
+  | 'ClickHouse'
+  | 'CouchDB'
+  | 'Couchbase'
+  | 'Firestore';
 
 export type ConnectionColor = 'red' | 'green' | 'yellow' | 'blue' | 'purple' | 'orange' | 'default';
 

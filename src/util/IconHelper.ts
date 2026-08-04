@@ -39,6 +39,11 @@ export class IconHelper {
       case 'ClickHouse':
         iconName = isConnected ? 'server/clickhouse_active.svg' : 'server/clickhouse.svg';
         break;
+      case 'CouchDB':
+      case 'Couchbase':
+      case 'Firestore':
+        iconName = 'server/database.svg';
+        break;
       default:
         iconName = 'server/db2.svg';
         break;

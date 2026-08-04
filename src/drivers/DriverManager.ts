@@ -6,6 +6,9 @@ import { RedisDriver } from './RedisDriver.js';
 import { MongoDriver } from './MongoDriver.js';
 import { ElasticsearchDriver } from './ElasticsearchDriver.js';
 import { ClickhouseDriver } from './ClickhouseDriver.js';
+import { CouchdbDriver } from './CouchdbDriver.js';
+import { CouchbaseDriver } from './CouchbaseDriver.js';
+import { FirestoreDriver } from './FirestoreDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { SshTunnelManager, SshTunnelResult } from '../ssh/SshTunnelManager.js';
 
@@ -61,6 +64,15 @@ export class DriverManager {
           break;
         case 'ClickHouse':
           driver = new ClickhouseDriver(finalConfig, password);
+          break;
+        case 'CouchDB':
+          driver = new CouchdbDriver(finalConfig, password);
+          break;
+        case 'Couchbase':
+          driver = new CouchbaseDriver(finalConfig, password);
+          break;
+        case 'Firestore':
+          driver = new FirestoreDriver(finalConfig, password);
           break;
         default:
           throw new Error(`Unsupported database type: ${config.type}`);

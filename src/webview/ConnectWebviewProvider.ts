@@ -91,8 +91,8 @@ export class ConnectWebviewProvider {
       host: ru ? 'Хост' : 'Host',
       port: ru ? 'Порт' : 'Port',
       user: ru ? 'Пользователь' : 'User',
-      password: ru ? 'Пароль' : 'Password',
-      database: ru ? 'База данных / Схема' : 'Database / Schema',
+      password: ru ? 'Пароль / API Key / Token' : 'Password / API Key / Token',
+      database: ru ? 'База данных / Project ID' : 'Database / Project ID',
       dbPath: ru ? 'Путь к файлу базы (.db)' : 'Database File Path (.db)',
       dbPathPh: ru ? '/path/to/database.db' : '/path/to/database.db',
       sshSection: ru ? '🔒 SSH Туннель' : '🔒 SSH Tunnel',
@@ -258,6 +258,9 @@ export class ConnectWebviewProvider {
       <option value="MongoDB">MongoDB</option>
       <option value="Elasticsearch">Elasticsearch</option>
       <option value="ClickHouse">ClickHouse</option>
+      <option value="CouchDB">Apache CouchDB</option>
+      <option value="Couchbase">Couchbase</option>
+      <option value="Firestore">Firebase Firestore</option>
     </select>
   </div>
 
@@ -402,6 +405,9 @@ export class ConnectWebviewProvider {
           if (type === 'MongoDB') portInput.value = 27017;
           if (type === 'Elasticsearch') portInput.value = 9200;
           if (type === 'ClickHouse') portInput.value = 8123;
+          if (type === 'CouchDB') portInput.value = 5984;
+          if (type === 'Couchbase') portInput.value = 8091;
+          if (type === 'Firestore') portInput.value = 443;
         }
       }
     }
