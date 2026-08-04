@@ -18,5 +18,9 @@
   "command.createView": "Create View",
   "command.createFunction": "Create Function",
   "command.createProcedure": "Create Procedure",
-  "command.createTrigger": "Create Trigger"
+  "command.createTrigger": "Create Trigger",
+  "command.addQueryFile": "New Saved Query",
+  "command.bindQueryFolder": "Bind Workspace Folder",
+  "command.renameQueryFile": "Rename Query File",
+  "command.deleteQueryFile": "Delete Query File"
 }

@@ -18,5 +18,9 @@
   "command.createView": "Создать Представление (View)",
   "command.createFunction": "Создать Функция (Function)",
   "command.createProcedure": "Создать Процедуру (Procedure)",
-  "command.createTrigger": "Создать Триггер (Trigger)"
+  "command.createTrigger": "Создать Триггер (Trigger)",
+  "command.addQueryFile": "Создать SQL Запрос",
+  "command.bindQueryFolder": "Привязать Папку с Запросами",
+  "command.renameQueryFile": "Переименовать Запрос",
+  "command.deleteQueryFile": "Удалить Запрос"
 }

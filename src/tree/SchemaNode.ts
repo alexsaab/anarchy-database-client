@@ -13,11 +13,13 @@ export class SchemaNode extends BaseNode {
   public connectionConfig: ConnectionConfig;
   public password?: string;
   public sshPassword?: string;
+  public context: vscode.ExtensionContext;
 
-  constructor(schemaName: string, connectionConfig: ConnectionConfig, password?: string, sshPassword?: string, parent?: BaseNode) {
+  constructor(schemaName: string, connectionConfig: ConnectionConfig, context: vscode.ExtensionContext, password?: string, sshPassword?: string, parent?: BaseNode) {
     super(`schema_${connectionConfig.id}_${connectionConfig.database}_${schemaName}`, schemaName, 'schemaNode', vscode.TreeItemCollapsibleState.Collapsed, parent);
     this.schemaName = schemaName;
     this.connectionConfig = connectionConfig;
+    this.context = context;
     this.password = password;
     this.sshPassword = sshPassword;
   }

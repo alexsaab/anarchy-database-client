@@ -10,11 +10,13 @@ export class ConnectionNode extends BaseNode {
   public config: ConnectionConfig;
   public password?: string;
   public sshPassword?: string;
+  public context: vscode.ExtensionContext;
   private isConnected: boolean = false;
 
-  constructor(config: ConnectionConfig, password?: string, sshPassword?: string) {
+  constructor(config: ConnectionConfig, context: vscode.ExtensionContext, password?: string, sshPassword?: string) {
     super(`conn_${config.id}`, config.name, 'connectionNode', vscode.TreeItemCollapsibleState.Collapsed);
     this.config = config;
+    this.context = context;
     this.password = password;
     this.sshPassword = sshPassword;
   }
@@ -39,11 +41,11 @@ export class ConnectionNode extends BaseNode {
       }
 
       if (this.config.database) {
-        return [new DatabaseNode(this.config.database, this.config, this.password, this.sshPassword, this)];
+        return [new DatabaseNode(this.config.database, this.config, this.context, this.password, this.sshPassword, this)];
       }
 
       const dbs = await driver.getDatabases();
-      return dbs.map((dbName) => new DatabaseNode(dbName, this.config, this.password, this.sshPassword, this));
+      return dbs.map((dbName) => new DatabaseNode(dbName, this.config, this.context, this.password, this.sshPassword, this));
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to connect to ${this.config.name}: ${err.message}`);
       return [];

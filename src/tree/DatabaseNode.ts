@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { BaseNode } from './BaseNode.js';
+import { QueryGroupNode } from './QueryGroupNode.js';
 import { TableGroupNode } from './TableGroupNode.js';
 import { ViewGroupNode } from './ViewGroupNode.js';
 import { FunctionGroupNode } from './FunctionGroupNode.js';
@@ -15,11 +16,13 @@ export class DatabaseNode extends BaseNode {
   public connectionConfig: ConnectionConfig;
   public password?: string;
   public sshPassword?: string;
+  public context: vscode.ExtensionContext;
 
-  constructor(dbName: string, connectionConfig: ConnectionConfig, password?: string, sshPassword?: string, parent?: BaseNode) {
+  constructor(dbName: string, connectionConfig: ConnectionConfig, context: vscode.ExtensionContext, password?: string, sshPassword?: string, parent?: BaseNode) {
     super(`db_${connectionConfig.id}_${dbName}`, dbName, 'databaseNode', vscode.TreeItemCollapsibleState.Collapsed, parent);
     this.dbName = dbName;
     this.connectionConfig = { ...connectionConfig, database: dbName };
+    this.context = context;
     this.password = password;
     this.sshPassword = sshPassword;
   }
@@ -33,6 +36,7 @@ export class DatabaseNode extends BaseNode {
 
   async getChildren(): Promise<BaseNode[]> {
     const dbType = this.connectionConfig.type;
+    const queryGroup = new QueryGroupNode(this.context, this.connectionConfig, this.dbName, this);
 
     try {
       if (dbType === 'PostgreSQL') {
@@ -40,7 +44,7 @@ export class DatabaseNode extends BaseNode {
         const schemas = await driver.getSchemas(this.dbName);
 
         if (schemas.length > 1) {
-          return schemas.map((s) => new SchemaNode(s, this.connectionConfig, this.password, this.sshPassword, this));
+          return [queryGroup, ...schemas.map((s) => new SchemaNode(s, this.connectionConfig, this.context, this.password, this.sshPassword, this))];
         }
       }
     } catch (e: any) {
@@ -49,15 +53,16 @@ export class DatabaseNode extends BaseNode {
 
     const schema = this.connectionConfig.schema || 'public';
 
-    // NoSQL / Document databases customization
     if (dbType === 'MongoDB' || dbType === 'CouchDB' || dbType === 'Couchbase' || dbType === 'Firestore') {
       return [
+        queryGroup,
         new TableGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
       ];
     }
 
     if (dbType === 'Elasticsearch') {
       return [
+        queryGroup,
         new TableGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
         new ViewGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
       ];
@@ -65,6 +70,7 @@ export class DatabaseNode extends BaseNode {
 
     if (dbType === 'SQLite') {
       return [
+        queryGroup,
         new TableGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
         new ViewGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
         new TriggerGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
@@ -73,14 +79,15 @@ export class DatabaseNode extends BaseNode {
 
     if (dbType === 'ClickHouse') {
       return [
+        queryGroup,
         new TableGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
         new ViewGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
         new FunctionGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
       ];
     }
 
-    // Default Relational DBs (MySQL, PostgreSQL)
     return [
+      queryGroup,
       new TableGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
       new ViewGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
       new FunctionGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),

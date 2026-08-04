@@ -9,8 +9,10 @@ export class DatabaseTreeProvider implements vscode.TreeDataProvider<BaseNode> {
   readonly onDidChangeTreeData: vscode.Event<BaseNode | undefined | void> = this._onDidChangeTreeData.event;
 
   private storageService: ConnectionStorageService;
+  private context: vscode.ExtensionContext;
 
-  constructor(storageService: ConnectionStorageService) {
+  constructor(context: vscode.ExtensionContext, storageService: ConnectionStorageService) {
+    this.context = context;
     this.storageService = storageService;
   }
 
@@ -30,7 +32,7 @@ export class DatabaseTreeProvider implements vscode.TreeDataProvider<BaseNode> {
       for (const p of profiles) {
         const pass = await this.storageService.getPassword(p.id);
         const sshPass = await this.storageService.getSshPassword(p.id);
-        connectionNodes.push(new ConnectionNode(p, pass, sshPass));
+        connectionNodes.push(new ConnectionNode(p, this.context, pass, sshPass));
       }
 
       // Group connections if any connection has a group set
@@ -63,6 +65,7 @@ export class DatabaseTreeProvider implements vscode.TreeDataProvider<BaseNode> {
 
       return [...resultNodes, ...rootNodes];
     }
+
     return element.getChildren();
   }
 }

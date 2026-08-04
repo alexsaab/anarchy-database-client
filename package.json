@@ -127,6 +127,26 @@
         "command": "dbClient.createTrigger",
         "title": "%command.createTrigger%",
         "icon": "$(add)"
+      },
+      {
+        "command": "dbClient.addQueryFile",
+        "title": "%command.addQueryFile%",
+        "icon": "$(add)"
+      },
+      {
+        "command": "dbClient.bindQueryFolder",
+        "title": "%command.bindQueryFolder%",
+        "icon": "$(link)"
+      },
+      {
+        "command": "dbClient.renameQueryFile",
+        "title": "%command.renameQueryFile%",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "dbClient.deleteQueryFile",
+        "title": "%command.deleteQueryFile%",
+        "icon": "$(trash)"
       }
     ],
     "menus": {
@@ -143,6 +163,26 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "dbClient.bindQueryFolder",
+          "when": "view == database-client-explorer && viewItem == queryGroupNode",
+          "group": "inline@1"
+        },
+        {
+          "command": "dbClient.addQueryFile",
+          "when": "view == database-client-explorer && viewItem == queryGroupNode",
+          "group": "inline@2"
+        },
+        {
+          "command": "dbClient.renameQueryFile",
+          "when": "view == database-client-explorer && viewItem == queryFileNode",
+          "group": "1_edit@1"
+        },
+        {
+          "command": "dbClient.deleteQueryFile",
+          "when": "view == database-client-explorer && viewItem == queryFileNode",
+          "group": "1_edit@2"
+        },
         {
           "command": "dbClient.createTable",
           "when": "view == database-client-explorer && viewItem == tableGroupNode",

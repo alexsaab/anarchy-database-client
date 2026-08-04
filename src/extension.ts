@@ -9,6 +9,9 @@ import { ViewGroupNode } from './tree/ViewGroupNode.js';
 import { FunctionGroupNode } from './tree/FunctionGroupNode.js';
 import { ProcedureGroupNode } from './tree/ProcedureGroupNode.js';
 import { TriggerGroupNode } from './tree/TriggerGroupNode.js';
+import { QueryGroupNode } from './tree/QueryGroupNode.js';
+import { QueryFileNode } from './tree/QueryFileNode.js';
+import { QueryFileStorage } from './storage/QueryFileStorage.js';
 import { ConnectWebviewProvider } from './webview/ConnectWebviewProvider.js';
 import { TableWebviewProvider } from './webview/TableWebviewProvider.js';
 import { TableDesignWebviewProvider } from './webview/TableDesignWebviewProvider.js';
@@ -25,7 +28,7 @@ export function activate(context: vscode.ExtensionContext) {
   IconHelper.setExtensionPath(context.extensionPath);
 
   const storageService = new ConnectionStorageService(context);
-  const treeProvider = new DatabaseTreeProvider(storageService);
+  const treeProvider = new DatabaseTreeProvider(context, storageService);
 
   // Register tree view IDs
   vscode.window.registerTreeDataProvider('database-client-explorer', treeProvider);
@@ -107,6 +110,69 @@ export function activate(context: vscode.ExtensionContext) {
         } catch (e: any) {
           vscode.window.showErrorMessage(`Failed to open DDL script: ${e.message}`);
         }
+      }
+    })
+  );
+
+  // Query Folder Commands (➕ Add, 🔗 Bind, Rename, Delete)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.addQueryFile', async (node?: QueryGroupNode) => {
+      if (!node) return;
+      const fileName = await vscode.window.showInputBox({
+        prompt: t('Enter query file name', 'Введите имя файла запроса'),
+        value: 'query_1.sql',
+      });
+      if (fileName) {
+        const filePath = await QueryFileStorage.createQueryFile(context, node.connectionConfig.id, fileName, node.dbName);
+        treeProvider.refresh();
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+        await vscode.window.showTextDocument(doc);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.bindQueryFolder', async (node?: QueryGroupNode) => {
+      if (!node) return;
+      const folderUri = await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        openLabel: t('Select Query Folder', 'Выбрать папку с запросами'),
+      });
+      if (folderUri && folderUri[0]) {
+        await QueryFileStorage.setBoundFolder(context, node.connectionConfig.id, folderUri[0].fsPath, node.dbName);
+        treeProvider.refresh();
+        vscode.window.showInformationMessage(t(`Linked query folder: ${folderUri[0].fsPath}`, `Привязана папка с запросами: ${folderUri[0].fsPath}`));
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.renameQueryFile', async (node?: QueryFileNode) => {
+      if (!node) return;
+      const newName = await vscode.window.showInputBox({
+        prompt: t('Enter new file name', 'Введите новое имя файла'),
+        value: node.fileName,
+      });
+      if (newName && newName !== node.fileName) {
+        QueryFileStorage.renameQueryFile(node.filePath, newName);
+        treeProvider.refresh();
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.deleteQueryFile', async (node?: QueryFileNode) => {
+      if (!node) return;
+      const confirm = await vscode.window.showWarningMessage(
+        t(`Delete query file "${node.fileName}"?`, `Удалить файл запроса "${node.fileName}"?`),
+        { modal: true },
+        t('Delete', 'Удалить')
+      );
+      if (confirm === t('Delete', 'Удалить')) {
+        QueryFileStorage.deleteQueryFile(node.filePath);
+        treeProvider.refresh();
       }
     })
   );
