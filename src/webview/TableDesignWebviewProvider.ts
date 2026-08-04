@@ -37,9 +37,9 @@ export class TableDesignWebviewProvider {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
             let sql = '';
             if (connectionConfig.type === 'PostgreSQL') {
-              sql = `COMMENT ON TABLE "${schemaName}"."${tableName}" IS '${msg.comment.replace(/'/g, "''")}';`;
+              sql = `COMMENT ON TABLE "${schemaName}"."${tableName}" IS '${(msg.comment || '').replace(/'/g, "''")}';`;
             } else {
-              sql = `ALTER TABLE \`${tableName}\` COMMENT = '${msg.comment.replace(/'/g, "''")}';`;
+              sql = `ALTER TABLE \`${tableName}\` COMMENT = '${(msg.comment || '').replace(/'/g, "''")}';`;
             }
             await driver.executeQuery(sql);
             vscode.window.showInformationMessage(t('Table comment updated!', 'Комментарий к таблице обновлен!'));
@@ -54,9 +54,9 @@ export class TableDesignWebviewProvider {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, tableNode.password, tableNode.sshPassword);
             let sql = '';
             if (connectionConfig.type === 'PostgreSQL') {
-              sql = `COMMENT ON COLUMN "${schemaName}"."${tableName}"."${msg.columnName}" IS '${msg.comment.replace(/'/g, "''")}';`;
+              sql = `COMMENT ON COLUMN "${schemaName}"."${tableName}"."${msg.columnName}" IS '${(msg.comment || '').replace(/'/g, "''")}';`;
             } else {
-              sql = `ALTER TABLE \`${tableName}\` MODIFY COLUMN \`${msg.columnName}\` ${msg.columnType} COMMENT '${msg.comment.replace(/'/g, "''")}';`;
+              sql = `ALTER TABLE \`${tableName}\` MODIFY COLUMN \`${msg.columnName}\` ${msg.columnType} COMMENT '${(msg.comment || '').replace(/'/g, "''")}';`;
             }
             await driver.executeQuery(sql);
             vscode.window.showInformationMessage(t(`Comment for "${msg.columnName}" updated!`, `Комментарий для колонки "${msg.columnName}" обновлен!`));
@@ -129,6 +129,8 @@ export class TableDesignWebviewProvider {
       editComment: ru ? '💬 Комментарий' : '💬 Comment',
       tableCommentBtn: ru ? '💬 Комментарий К Таблице' : '💬 Table Comment',
       drop: ru ? '🗑️ Удалить' : '🗑️ Drop',
+      save: ru ? 'Сохранить' : 'Save',
+      cancel: ru ? 'Отмена' : 'Cancel',
     };
 
     return `<!DOCTYPE html>
@@ -154,7 +156,7 @@ export class TableDesignWebviewProvider {
       align-items: center;
       flex-wrap: wrap;
     }
-    input, select, button {
+    input, select, button, textarea {
       padding: 6px 10px;
       background: var(--vscode-input-background);
       color: var(--vscode-input-foreground);
@@ -194,6 +196,46 @@ export class TableDesignWebviewProvider {
       color: #98c379;
       font-size: 12px;
     }
+
+    /* Modal Overlay */
+    #modalOverlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-content {
+      background: var(--vscode-sideBar-background);
+      padding: 20px;
+      border-radius: 6px;
+      width: 420px;
+      max-width: 90%;
+      max-height: 80vh;
+      overflow-y: auto;
+      border: 1px solid var(--vscode-panel-border, #555);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    }
+    .modal-form-group {
+      margin-bottom: 12px;
+    }
+    .modal-form-group label {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 12px;
+      font-weight: bold;
+    }
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 18px;
+      justify-content: flex-end;
+    }
   </style>
 </head>
 <body>
@@ -232,14 +274,49 @@ export class TableDesignWebviewProvider {
     <tbody id="colBody"></tbody>
   </table>
 
+  <!-- HTML Modal -->
+  <div id="modalOverlay">
+    <div class="modal-content">
+      <h3 id="modalTitle" style="margin-top:0;">Modal</h3>
+      <div id="modalBody"></div>
+      <div class="modal-actions">
+        <button class="secondary" onclick="closeModal()">${text.cancel}</button>
+        <button id="modalConfirmBtn">${text.save}</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const vscode = acquireVsCodeApi();
 
+    function openModal(title, bodyHtml, onConfirm) {
+      document.getElementById('modalTitle').innerText = title;
+      document.getElementById('modalBody').innerHTML = bodyHtml;
+      document.getElementById('modalOverlay').style.display = 'flex';
+
+      const confirmBtn = document.getElementById('modalConfirmBtn');
+      confirmBtn.onclick = () => {
+        onConfirm();
+        closeModal();
+      };
+    }
+
+    function closeModal() {
+      document.getElementById('modalOverlay').style.display = 'none';
+    }
+
     document.getElementById('tableCommentBtn').onclick = () => {
-      const comment = prompt('${ru ? 'Введите комментарий для таблицы' : 'Enter comment for table'} "${tableName}":');
-      if (comment !== null) {
+      const html = \`
+        <div class="modal-form-group">
+          <label>${ru ? 'Введите комментарий для таблицы' : 'Enter table comment'}:</label>
+          <textarea id="tableCommentInput" style="width:100%; height:80px;" placeholder="Comment..."></textarea>
+        </div>
+      \`;
+
+      openModal('${text.tableCommentBtn}', html, () => {
+        const comment = document.getElementById('tableCommentInput').value;
         vscode.postMessage({ type: 'setTableComment', comment });
-      }
+      });
     };
 
     document.getElementById('addBtn').onclick = () => {
@@ -252,25 +329,45 @@ export class TableDesignWebviewProvider {
     };
 
     function editCol(oldName, oldType) {
-      const newName = prompt('Enter new column name:', oldName);
-      if (!newName) return;
-      const newType = prompt('Enter data type:', oldType);
-      if (!newType) return;
+      const html = \`
+        <div class="modal-form-group">
+          <label>Column Name:</label>
+          <input type="text" id="editColName" value="\${oldName}" style="width:100%;">
+        </div>
+        <div class="modal-form-group">
+          <label>Data Type:</label>
+          <input type="text" id="editColType" value="\${oldType}" style="width:100%;">
+        </div>
+      \`;
 
-      vscode.postMessage({ type: 'editColumn', oldName, newName, newType });
+      openModal('${ru ? 'Редактировать колонку' : 'Edit Column'}: ' + oldName, html, () => {
+        const newName = document.getElementById('editColName').value;
+        const newType = document.getElementById('editColType').value;
+        if (newName && newType) {
+          vscode.postMessage({ type: 'editColumn', oldName, newName, newType });
+        }
+      });
     }
 
     function editColComment(colName, colType, currentComment) {
-      const comment = prompt('${ru ? 'Введите комментарий для колонки' : 'Enter comment for column'} "' + colName + '":', currentComment || '');
-      if (comment !== null) {
+      const html = \`
+        <div class="modal-form-group">
+          <label>${ru ? 'Комментарий к колонке' : 'Column Comment'} "\${colName}":</label>
+          <textarea id="colCommentInput" style="width:100%; height:80px;">\${currentComment || ''}</textarea>
+        </div>
+      \`;
+
+      openModal('${ru ? 'Комментарий колонки' : 'Column Comment'}: ' + colName, html, () => {
+        const comment = document.getElementById('colCommentInput').value;
         vscode.postMessage({ type: 'setColumnComment', columnName: colName, columnType: colType, comment });
-      }
+      });
     }
 
     function dropCol(colName) {
-      if (confirm('Drop column "' + colName + '"?')) {
+      const html = \`<p>${ru ? 'Удалить колонку' : 'Drop column'} <b>\${colName}</b>?</p>\`;
+      openModal('${ru ? 'Подтвердите удаление' : 'Confirm Deletion'}', html, () => {
         vscode.postMessage({ type: 'dropColumn', columnName: colName });
-      }
+      });
     }
 
     window.addEventListener('message', event => {
@@ -285,7 +382,7 @@ export class TableDesignWebviewProvider {
             <td>\${c.isPrimaryKey ? '🔑 YES' : 'NO'}</td>
             <td class="comment-tag">\${c.comment ? '💬 ' + c.comment : '<i>-</i>'}</td>
             <td>
-              <button class="secondary" onclick="editColComment('\${c.name}', '\${c.type}', '\${c.comment || ''}')">${text.editComment}</button>
+              <button class="secondary" onclick="editColComment('\${c.name}', '\${c.type}', '\${c.comment ? c.comment.replace(/'/g, "\\\\'") : ''}')">${text.editComment}</button>
               <button class="secondary" onclick="editCol('\${c.name}', '\${c.type}')">${text.edit}</button>
               <button class="danger" onclick="dropCol('\${c.name}')">${text.drop}</button>
             </td>
