@@ -209,6 +209,7 @@ export class TableDesignWebviewProvider {
       color: var(--vscode-input-foreground);
       border: 1px solid var(--vscode-input-border, #444);
       border-radius: 4px;
+      box-sizing: border-box;
     }
     button {
       cursor: pointer;
@@ -257,35 +258,43 @@ export class TableDesignWebviewProvider {
       left: 0;
       width: 100%;
       height: 100%;
-      background: rgba(0, 0, 0, 0.7);
+      background: rgba(0, 0, 0, 0.75);
       z-index: 1000;
       align-items: center;
       justify-content: center;
     }
     .modal-content {
       background: var(--vscode-sideBar-background);
-      padding: 20px;
-      border-radius: 6px;
-      width: 420px;
-      max-width: 90%;
-      max-height: 80vh;
+      padding: 24px;
+      border-radius: 8px;
+      width: 540px;
+      max-width: 90vw;
+      max-height: 85vh;
       overflow-y: auto;
+      overflow-x: hidden;
+      box-sizing: border-box;
       border: 1px solid var(--vscode-panel-border, #555);
-      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+    }
+    .modal-content input[type="text"],
+    .modal-content textarea,
+    .modal-content select {
+      width: 100% !important;
+      box-sizing: border-box !important;
     }
     .modal-form-group {
-      margin-bottom: 12px;
+      margin-bottom: 14px;
     }
     .modal-form-group label {
       display: block;
-      margin-bottom: 4px;
+      margin-bottom: 6px;
       font-size: 12px;
       font-weight: bold;
     }
     .modal-actions {
       display: flex;
       gap: 10px;
-      margin-top: 18px;
+      margin-top: 20px;
       justify-content: flex-end;
     }
   </style>
@@ -344,6 +353,7 @@ export class TableDesignWebviewProvider {
   <script>
     const vscode = acquireVsCodeApi();
     let currentTableComment = '';
+    let globalColumns = [];
 
     function openModal(title, bodyHtml, onConfirm) {
       document.getElementById('modalTitle').innerText = title;
@@ -365,7 +375,7 @@ export class TableDesignWebviewProvider {
       const html = \`
         <div class="modal-form-group">
           <label>${ru ? 'Введите комментарий для таблицы' : 'Enter table comment'}:</label>
-          <textarea id="tableCommentInput" style="width:100%; height:80px;" placeholder="Comment...">\${currentTableComment || ''}</textarea>
+          <textarea id="tableCommentInput" style="width:100%; height:90px;" placeholder="Comment...">\${currentTableComment || ''}</textarea>
         </div>
       \`;
 
@@ -384,45 +394,54 @@ export class TableDesignWebviewProvider {
       vscode.postMessage({ type: 'addColumn', col: { name, type, nullable } });
     };
 
-    function editCol(oldName, oldType) {
+    function editCol(colIndex) {
+      const c = globalColumns[colIndex];
+      if (!c) return;
+
       const html = \`
         <div class="modal-form-group">
           <label>Column Name:</label>
-          <input type="text" id="editColName" value="\${oldName}" style="width:100%;">
+          <input type="text" id="editColName" value="\${c.name.replace(/"/g, '&quot;')}" style="width:100%;">
         </div>
         <div class="modal-form-group">
           <label>Data Type:</label>
-          <input type="text" id="editColType" value="\${oldType}" style="width:100%;">
+          <input type="text" id="editColType" value="\${c.type.replace(/"/g, '&quot;')}" style="width:100%;">
         </div>
       \`;
 
-      openModal('${ru ? 'Редактировать колонку' : 'Edit Column'}: ' + oldName, html, () => {
+      openModal('${ru ? 'Редактировать колонку' : 'Edit Column'}: ' + c.name, html, () => {
         const newName = document.getElementById('editColName').value;
         const newType = document.getElementById('editColType').value;
         if (newName && newType) {
-          vscode.postMessage({ type: 'editColumn', oldName, newName, newType });
+          vscode.postMessage({ type: 'editColumn', oldName: c.name, newName, newType });
         }
       });
     }
 
-    function editColComment(colName, colType, currentComment) {
+    function editColComment(colIndex) {
+      const c = globalColumns[colIndex];
+      if (!c) return;
+
       const html = \`
         <div class="modal-form-group">
-          <label>${ru ? 'Комментарий к колонке' : 'Column Comment'} "\${colName}":</label>
-          <textarea id="colCommentInput" style="width:100%; height:80px;">\${currentComment || ''}</textarea>
+          <label>${ru ? 'Комментарий к колонке' : 'Column Comment'} "\${c.name}":</label>
+          <textarea id="colCommentInput" style="width:100%; height:90px;">\${c.comment || ''}</textarea>
         </div>
       \`;
 
-      openModal('${ru ? 'Комментарий колонки' : 'Column Comment'}: ' + colName, html, () => {
+      openModal('${ru ? 'Комментарий колонки' : 'Column Comment'}: ' + c.name, html, () => {
         const comment = document.getElementById('colCommentInput').value;
-        vscode.postMessage({ type: 'setColumnComment', columnName: colName, columnType: colType, comment });
+        vscode.postMessage({ type: 'setColumnComment', columnName: c.name, columnType: c.type, comment });
       });
     }
 
-    function dropCol(colName) {
-      const html = \`<p>${ru ? 'Удалить колонку' : 'Drop column'} <b>\${colName}</b>?</p>\`;
+    function dropCol(colIndex) {
+      const c = globalColumns[colIndex];
+      if (!c) return;
+
+      const html = \`<p>${ru ? 'Удалить колонку' : 'Drop column'} <b>\${c.name}</b>?</p>\`;
       openModal('${ru ? 'Подтвердите удаление' : 'Confirm Deletion'}', html, () => {
-        vscode.postMessage({ type: 'dropColumn', columnName: colName });
+        vscode.postMessage({ type: 'dropColumn', columnName: c.name });
       });
     }
 
@@ -430,10 +449,11 @@ export class TableDesignWebviewProvider {
       const msg = event.data;
       if (msg.type === 'renderColumns') {
         currentTableComment = msg.tableComment || '';
+        globalColumns = msg.columns || [];
         document.getElementById('tableCommentDisplay').innerHTML = currentTableComment ? '💬 ' + currentTableComment : '<i>no comment</i>';
 
         const body = document.getElementById('colBody');
-        body.innerHTML = msg.columns.map(c => \`
+        body.innerHTML = globalColumns.map((c, idx) => \`
           <tr>
             <td><b>\${c.name}</b></td>
             <td>\${c.type}</td>
@@ -441,9 +461,9 @@ export class TableDesignWebviewProvider {
             <td>\${c.isPrimaryKey ? '🔑 YES' : 'NO'}</td>
             <td class="comment-tag">\${c.comment ? '💬 ' + c.comment : '<i>-</i>'}</td>
             <td>
-              <button class="secondary" onclick="editColComment('\${c.name}', '\${c.type}', '\${c.comment ? c.comment.replace(/'/g, "\\\\'") : ''}')">${text.editComment}</button>
-              <button class="secondary" onclick="editCol('\${c.name}', '\${c.type}')">${text.edit}</button>
-              <button class="danger" onclick="dropCol('\${c.name}')">${text.drop}</button>
+              <button class="secondary" onclick="editColComment(\${idx})">${text.editComment}</button>
+              <button class="secondary" onclick="editCol(\${idx})">${text.edit}</button>
+              <button class="danger" onclick="dropCol(\${idx})">${text.drop}</button>
             </td>
           </tr>
         \`).join('');

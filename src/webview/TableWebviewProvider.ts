@@ -233,6 +233,7 @@ export class TableWebviewProvider {
       color: var(--vscode-input-foreground);
       border: 1px solid var(--vscode-input-border, #444);
       border-radius: 4px;
+      box-sizing: border-box;
     }
     button {
       cursor: pointer;
@@ -307,35 +308,43 @@ export class TableWebviewProvider {
       left: 0;
       width: 100%;
       height: 100%;
-      background: rgba(0, 0, 0, 0.7);
+      background: rgba(0, 0, 0, 0.75);
       z-index: 1000;
       align-items: center;
       justify-content: center;
     }
     .modal-content {
       background: var(--vscode-sideBar-background);
-      padding: 20px;
-      border-radius: 6px;
-      width: 420px;
-      max-width: 90%;
-      max-height: 80vh;
+      padding: 24px;
+      border-radius: 8px;
+      width: 540px;
+      max-width: 90vw;
+      max-height: 85vh;
       overflow-y: auto;
+      overflow-x: hidden;
+      box-sizing: border-box;
       border: 1px solid var(--vscode-panel-border, #555);
-      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+    }
+    .modal-content input[type="text"],
+    .modal-content textarea,
+    .modal-content select {
+      width: 100% !important;
+      box-sizing: border-box !important;
     }
     .modal-form-group {
-      margin-bottom: 12px;
+      margin-bottom: 14px;
     }
     .modal-form-group label {
       display: block;
-      margin-bottom: 4px;
+      margin-bottom: 6px;
       font-size: 12px;
       font-weight: bold;
     }
     .modal-actions {
       display: flex;
       gap: 10px;
-      margin-top: 18px;
+      margin-top: 20px;
       justify-content: flex-end;
     }
   </style>
@@ -475,8 +484,8 @@ export class TableWebviewProvider {
       const html = \`
         <div class="modal-form-group">
           <label>Value for "\${colName}":</label>
-          <textarea id="cellValInput" style="width:100%; height:80px;" \${isNull ? 'disabled' : ''}>\${isNull ? '' : currentVal}</textarea>
-          <div style="margin-top:6px;">
+          <textarea id="cellValInput" style="width:100%; height:90px;" \${isNull ? 'disabled' : ''}>\${isNull ? '' : currentVal}</textarea>
+          <div style="margin-top:8px;">
             <label style="font-size:12px; font-weight:normal;"><input type="checkbox" id="cellSetNullCheckbox" \${isNull ? 'checked' : ''} onchange="document.getElementById('cellValInput').disabled = this.checked;"> ${text.setNull}</label>
           </div>
         </div>
