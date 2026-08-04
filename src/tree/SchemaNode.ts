@@ -1,6 +1,10 @@
 import * as vscode from 'vscode';
 import { BaseNode } from './BaseNode.js';
 import { TableGroupNode } from './TableGroupNode.js';
+import { ViewGroupNode } from './ViewGroupNode.js';
+import { FunctionGroupNode } from './FunctionGroupNode.js';
+import { ProcedureGroupNode } from './ProcedureGroupNode.js';
+import { TriggerGroupNode } from './TriggerGroupNode.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { IconHelper } from '../util/IconHelper.js';
 
@@ -26,6 +30,12 @@ export class SchemaNode extends BaseNode {
   }
 
   async getChildren(): Promise<BaseNode[]> {
-    return [new TableGroupNode(this.connectionConfig, this.password, this.sshPassword, this.schemaName, this)];
+    return [
+      new TableGroupNode(this.connectionConfig, this.password, this.sshPassword, this.schemaName, this),
+      new ViewGroupNode(this.connectionConfig, this.password, this.sshPassword, this.schemaName, this),
+      new FunctionGroupNode(this.connectionConfig, this.password, this.sshPassword, this.schemaName, this),
+      new ProcedureGroupNode(this.connectionConfig, this.password, this.sshPassword, this.schemaName, this),
+      new TriggerGroupNode(this.connectionConfig, this.password, this.sshPassword, this.schemaName, this),
+    ];
   }
 }
