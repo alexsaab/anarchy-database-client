@@ -22,5 +22,11 @@
   "command.addQueryFile": "New Saved Query",
   "command.bindQueryFolder": "Bind Workspace Folder",
   "command.renameQueryFile": "Rename Query File",
-  "command.deleteQueryFile": "Delete Query File"
+  "command.deleteQueryFile": "Delete Query File",
+  "command.schemaDiff": "Compare Schemas & Migration",
+  "command.queryBuilder": "Visual Query Builder",
+  "command.explainQuery": "Execution Plan (EXPLAIN)",
+  "command.openRedisEditor": "Redis Key-Value Manager",
+  "command.compareData": "Compare & Sync Table Data",
+  "command.aiAssistant": "AI SQL Assistant"
 }

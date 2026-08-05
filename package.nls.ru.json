@@ -22,5 +22,11 @@
   "command.addQueryFile": "Создать SQL Запрос",
   "command.bindQueryFolder": "Привязать Папку с Запросами",
   "command.renameQueryFile": "Переименовать Запрос",
-  "command.deleteQueryFile": "Удалить Запрос"
+  "command.deleteQueryFile": "Удалить Запрос",
+  "command.schemaDiff": "Сравнение Схем и Миграции",
+  "command.queryBuilder": "Визуальный Конструктор Запросов",
+  "command.explainQuery": "План Выполнения (EXPLAIN)",
+  "command.openRedisEditor": "Redis Менеджер Ключей",
+  "command.compareData": "Сравнение и Синхронизация Данных",
+  "command.aiAssistant": "ИИ SQL-Помощник"
 }

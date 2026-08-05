@@ -62,7 +62,7 @@ export class RedisDriver extends BaseDriver {
       await this.connect();
     }
     const keys = await this.client!.keys('*');
-    return keys.slice(0, 100).map((k) => ({
+    return keys.slice(0, 100).map((k: string) => ({
       name: k,
       type: 'table',
     }));
@@ -132,5 +132,38 @@ export class RedisDriver extends BaseDriver {
       totalCount: 1,
       costTimeMs: Date.now() - startTime,
     };
+  }
+
+  async getKeyType(key: string): Promise<string> {
+    if (!this.client) await this.connect();
+    return await this.client!.type(key);
+  }
+
+  async getKeyTtl(key: string): Promise<number> {
+    if (!this.client) await this.connect();
+    return await this.client!.ttl(key);
+  }
+
+  async getKeyValue(key: string): Promise<any> {
+    if (!this.client) await this.connect();
+    const type = await this.client!.type(key);
+    if (type === 'string') return await this.client!.get(key);
+    if (type === 'hash') return await this.client!.hgetall(key);
+    if (type === 'list') return await this.client!.lrange(key, 0, 100);
+    if (type === 'set') return await this.client!.smembers(key);
+    return '';
+  }
+
+  async setKeyValue(key: string, value: string, ttl: number = -1): Promise<void> {
+    if (!this.client) await this.connect();
+    await this.client!.set(key, value);
+    if (ttl > 0) {
+      await this.client!.expire(key, ttl);
+    }
+  }
+
+  async deleteKey(key: string): Promise<void> {
+    if (!this.client) await this.connect();
+    await this.client!.del(key);
   }
 }

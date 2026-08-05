@@ -11,6 +11,12 @@ export class MysqlDriver extends BaseDriver {
   }
 
   async connect(): Promise<void> {
+    const connAny = this.connection as any;
+    if (connAny && (connAny._closing || connAny._ended || connAny.stream?.destroyed || connAny.stream?.writable === false)) {
+      this.connection = null;
+      this.isConnected = false;
+    }
+
     if (!this.isConnected || !this.connection) {
       this.connection = await mysql.createConnection({
         host: this.config.host || 'localhost',
@@ -20,13 +26,43 @@ export class MysqlDriver extends BaseDriver {
         database: this.config.database || undefined,
         multipleStatements: true,
       });
+      (this.connection as any).on('error', (err: any) => {
+        if (err?.code === 'PROTOCOL_CONNECTION_LOST' || err?.fatal) {
+          this.connection = null;
+          this.isConnected = false;
+        }
+      });
       this.isConnected = true;
+    }
+  }
+
+  private async queryWithRetry(sql: string, params?: any[]): Promise<any> {
+    await this.connect();
+    try {
+      return await this.connection!.query(sql, params);
+    } catch (err: any) {
+      const msg = String(err?.message || '');
+      if (
+        msg.includes('closed state') ||
+        err?.code === 'PROTOCOL_CONNECTION_LOST' ||
+        err?.code === 'ECONNRESET' ||
+        err?.code === 'PIPE_CLOSED' ||
+        err?.fatal
+      ) {
+        this.connection = null;
+        this.isConnected = false;
+        await this.connect();
+        return await this.connection!.query(sql, params);
+      }
+      throw err;
     }
   }
 
   async disconnect(): Promise<void> {
     if (this.connection) {
-      await this.connection.end();
+      try {
+        await this.connection.end();
+      } catch (e) {}
       this.connection = null;
       this.isConnected = false;
     }
@@ -45,8 +81,7 @@ export class MysqlDriver extends BaseDriver {
   }
 
   async getDatabases(): Promise<string[]> {
-    await this.connect();
-    const [results] = await this.connection!.query('SHOW DATABASES;');
+    const [results] = await this.queryWithRetry('SHOW DATABASES;');
     const rows = results as any[];
     return rows
       .map((r: any) => r.Database || r.database || Object.values(r)[0])
@@ -58,14 +93,13 @@ export class MysqlDriver extends BaseDriver {
     if (!targetDb) return [];
     if (databaseName) this.config.database = databaseName;
 
-    await this.connect();
     try {
-      await this.connection!.query(`USE \`${targetDb}\`;`);
+      await this.queryWithRetry(`USE \`${targetDb}\`;`);
     } catch (e) {
       // Ignore USE errors
     }
 
-    const [results] = await this.connection!.query(
+    const [results] = await this.queryWithRetry(
       `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${targetDb}' AND TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VIEW', 'SYSTEM TABLE');`
     );
 
@@ -81,14 +115,13 @@ export class MysqlDriver extends BaseDriver {
     if (!targetDb) return [];
     if (databaseName) this.config.database = databaseName;
 
-    await this.connect();
     try {
-      await this.connection!.query(`USE \`${targetDb}\`;`);
+      await this.queryWithRetry(`USE \`${targetDb}\`;`);
     } catch (e) {
       // Ignore
     }
 
-    const [results] = await this.connection!.query(
+    const [results] = await this.queryWithRetry(
       `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${targetDb}' AND TABLE_TYPE = 'VIEW';`
     );
 
@@ -102,9 +135,8 @@ export class MysqlDriver extends BaseDriver {
   async getFunctions(databaseName?: string): Promise<RoutineInfo[]> {
     const targetDb = databaseName || this.config.database;
     if (!targetDb) return [];
-    await this.connect();
 
-    const [results] = await this.connection!.query(
+    const [results] = await this.queryWithRetry(
       `SELECT ROUTINE_NAME, ROUTINE_COMMENT FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '${targetDb}' AND ROUTINE_TYPE = 'FUNCTION';`
     );
 
@@ -119,9 +151,8 @@ export class MysqlDriver extends BaseDriver {
   async getProcedures(databaseName?: string): Promise<RoutineInfo[]> {
     const targetDb = databaseName || this.config.database;
     if (!targetDb) return [];
-    await this.connect();
 
-    const [results] = await this.connection!.query(
+    const [results] = await this.queryWithRetry(
       `SELECT ROUTINE_NAME, ROUTINE_COMMENT FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '${targetDb}' AND ROUTINE_TYPE = 'PROCEDURE';`
     );
 
@@ -136,9 +167,8 @@ export class MysqlDriver extends BaseDriver {
   async getTriggers(databaseName?: string): Promise<TriggerInfo[]> {
     const targetDb = databaseName || this.config.database;
     if (!targetDb) return [];
-    await this.connect();
 
-    const [results] = await this.connection!.query(
+    const [results] = await this.queryWithRetry(
       `SELECT TRIGGER_NAME, EVENT_OBJECT_TABLE, ACTION_TIMING, EVENT_MANIPULATION FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = '${targetDb}';`
     );
 
@@ -153,29 +183,28 @@ export class MysqlDriver extends BaseDriver {
 
   async getScript(name: string, type: 'view' | 'function' | 'procedure' | 'trigger', databaseName?: string): Promise<string> {
     const targetDb = databaseName || this.config.database;
-    await this.connect();
 
     if (targetDb) {
       try {
-        await this.connection!.query(`USE \`${targetDb}\`;`);
+        await this.queryWithRetry(`USE \`${targetDb}\`;`);
       } catch (e) {}
     }
 
     try {
       if (type === 'view') {
-        const [res] = await this.connection!.query(`SHOW CREATE VIEW \`${name}\`;`);
+        const [res] = await this.queryWithRetry(`SHOW CREATE VIEW \`${name}\`;`);
         const row = (res as any[])[0];
         return row?.['Create View'] || row?.['create view'] || Object.values(row || {})[1] || `-- Create View ${name}`;
       } else if (type === 'procedure') {
-        const [res] = await this.connection!.query(`SHOW CREATE PROCEDURE \`${name}\`;`);
+        const [res] = await this.queryWithRetry(`SHOW CREATE PROCEDURE \`${name}\`;`);
         const row = (res as any[])[0];
         return row?.['Create Procedure'] || row?.['create procedure'] || Object.values(row || {})[2] || `-- Create Procedure ${name}`;
       } else if (type === 'function') {
-        const [res] = await this.connection!.query(`SHOW CREATE FUNCTION \`${name}\`;`);
+        const [res] = await this.queryWithRetry(`SHOW CREATE FUNCTION \`${name}\`;`);
         const row = (res as any[])[0];
         return row?.['Create Function'] || row?.['create function'] || Object.values(row || {})[2] || `-- Create Function ${name}`;
       } else if (type === 'trigger') {
-        const [res] = await this.connection!.query(`SHOW CREATE TRIGGER \`${name}\`;`);
+        const [res] = await this.queryWithRetry(`SHOW CREATE TRIGGER \`${name}\`;`);
         const row = (res as any[])[0];
         return row?.['SQL Original Statement'] || row?.['sql original statement'] || Object.values(row || {})[2] || `-- Create Trigger ${name}`;
       }
@@ -188,9 +217,8 @@ export class MysqlDriver extends BaseDriver {
   async getColumns(tableName: string, databaseName?: string): Promise<ColumnInfo[]> {
     const targetDb = databaseName || this.config.database;
     if (!targetDb) return [];
-    await this.connect();
 
-    const [results] = await this.connection!.query(
+    const [results] = await this.queryWithRetry(
       `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, COLUMN_COMMENT, EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '${targetDb}' AND TABLE_NAME = '${tableName}' ORDER BY ORDINAL_POSITION;`
     );
 
@@ -217,9 +245,8 @@ export class MysqlDriver extends BaseDriver {
   async getForeignKeys(tableName: string, databaseName?: string): Promise<ForeignKeyInfo[]> {
     const targetDb = databaseName || this.config.database;
     if (!targetDb) return [];
-    await this.connect();
 
-    const [results] = await this.connection!.query(
+    const [results] = await this.queryWithRetry(
       `SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = '${targetDb}' AND TABLE_NAME = '${tableName}' AND REFERENCED_TABLE_NAME IS NOT NULL;`
     );
 
@@ -233,17 +260,16 @@ export class MysqlDriver extends BaseDriver {
   }
 
   async executeQuery(sql: string): Promise<QueryResult> {
-    await this.connect();
     const startTime = Date.now();
 
     const db = this.config.database;
     if (db) {
       try {
-        await this.connection!.query(`USE \`${db}\`;`);
+        await this.queryWithRetry(`USE \`${db}\`;`);
       } catch (e) {}
     }
 
-    const [results, fields] = await this.connection!.query(sql);
+    const [results, fields] = await this.queryWithRetry(sql);
     const costTimeMs = Date.now() - startTime;
 
     if (Array.isArray(results)) {

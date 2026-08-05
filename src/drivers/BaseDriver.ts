@@ -36,9 +36,11 @@ export abstract class BaseDriver {
   abstract testConnection(): Promise<{ success: boolean; message?: string }>;
 
   abstract getDatabases(): Promise<string[]>;
-  abstract getTables(databaseName?: string): Promise<TableInfo[]>;
+  abstract getTables(databaseName?: string, schemaName?: string): Promise<TableInfo[]>;
   abstract getColumns(tableName: string, databaseName?: string, schemaName?: string): Promise<ColumnInfo[]>;
-  abstract getForeignKeys(tableName: string, databaseName?: string, schemaName?: string): Promise<ForeignKeyInfo[]>;
+  async getForeignKeys(tableName: string, databaseName?: string, schemaName?: string): Promise<ForeignKeyInfo[]> {
+    return [];
+  }
 
   async getSchemas(databaseName?: string): Promise<string[]> {
     return ['public'];

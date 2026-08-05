@@ -147,6 +147,36 @@
         "command": "dbClient.deleteQueryFile",
         "title": "%command.deleteQueryFile%",
         "icon": "$(trash)"
+      },
+      {
+        "command": "dbClient.schemaDiff",
+        "title": "%command.schemaDiff%",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "dbClient.queryBuilder",
+        "title": "%command.queryBuilder%",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "dbClient.explainQuery",
+        "title": "%command.explainQuery%",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "dbClient.openRedisEditor",
+        "title": "%command.openRedisEditor%",
+        "icon": "$(symbol-key)"
+      },
+      {
+        "command": "dbClient.compareData",
+        "title": "%command.compareData%",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "dbClient.aiAssistant",
+        "title": "%command.aiAssistant%",
+        "icon": "$(wand)"
       }
     ],
     "menus": {
@@ -247,6 +277,31 @@
           "command": "dbClient.processList",
           "when": "view == database-client-explorer && viewItem == connectionNode",
           "group": "3_server@1"
+        },
+        {
+          "command": "dbClient.schemaDiff",
+          "when": "view == database-client-explorer && (viewItem == connectionNode || viewItem == databaseNode)",
+          "group": "1_tools@4"
+        },
+        {
+          "command": "dbClient.queryBuilder",
+          "when": "view == database-client-explorer && (viewItem == connectionNode || viewItem == databaseNode)",
+          "group": "1_tools@5"
+        },
+        {
+          "command": "dbClient.openRedisEditor",
+          "when": "view == database-client-explorer && viewItem == connectionNode",
+          "group": "1_tools@6"
+        },
+        {
+          "command": "dbClient.aiAssistant",
+          "when": "view == database-client-explorer && (viewItem == connectionNode || viewItem == databaseNode)",
+          "group": "1_tools@7"
+        },
+        {
+          "command": "dbClient.compareData",
+          "when": "view == database-client-explorer && viewItem == tableNode",
+          "group": "1_table@2"
         },
         {
           "command": "dbClient.editConnection",

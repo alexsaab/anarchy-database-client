@@ -1,7 +1,7 @@
 export interface ColumnInfo {
   name: string;
   type: string;
-  nullable: boolean;
+  nullable?: boolean;
   isPrimaryKey?: boolean;
   defaultValue?: string;
   comment?: string;
@@ -10,7 +10,7 @@ export interface ColumnInfo {
 export interface TableInfo {
   name: string;
   schema?: string;
-  type?: 'table' | 'view';
+  type?: 'table' | 'view' | 'collection' | 'bucket' | string;
   comment?: string;
 }
 

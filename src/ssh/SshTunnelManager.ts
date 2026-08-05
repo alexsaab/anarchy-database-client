@@ -1,5 +1,6 @@
 import * as net from 'net';
 import * as fs from 'fs';
+// @ts-ignore
 import { Client } from 'ssh2';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 
@@ -31,7 +32,7 @@ export class SshTunnelManager {
           localSocket.remotePort || 0,
           config.host || 'localhost',
           config.port || 3306,
-          (err, stream) => {
+          (err: any, stream: any) => {
             if (err) {
               localSocket.destroy();
               return;
@@ -66,14 +67,14 @@ export class SshTunnelManager {
           .on('ready', () => {
             resolve({ server, localPort });
           })
-          .on('error', (err) => {
+          .on('error', (err: any) => {
             server.close();
             reject(new Error(`SSH Tunnel connection error: ${err.message}`));
           })
           .connect(connectConfig);
       });
 
-      server.on('error', (err) => {
+      server.on('error', (err: any) => {
         reject(err);
       });
     });

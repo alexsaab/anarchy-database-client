@@ -29,6 +29,15 @@ export class DriverManager {
   public async getDriver(config: ConnectionConfig, password?: string, sshPassword?: string): Promise<BaseDriver> {
     const driverKey = `${config.id}_${config.database || ''}`;
     let driver = this.activeDrivers.get(driverKey);
+    if (driver) {
+      try {
+        await driver.connect();
+      } catch (e) {
+        await driver.disconnect().catch(() => {});
+        this.activeDrivers.delete(driverKey);
+        driver = undefined;
+      }
+    }
 
     if (!driver) {
       let finalConfig = { ...config };

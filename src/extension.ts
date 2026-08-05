@@ -21,6 +21,13 @@ import { DatabaseDumpService } from './dump/DatabaseDumpService.js';
 import { MockDataGenerator } from './mock/MockDataGenerator.js';
 import { DriverManager } from './drivers/DriverManager.js';
 import { ScriptNode } from './tree/ScriptNode.js';
+import { SchemaDiffWebviewProvider } from './webview/SchemaDiffWebviewProvider.js';
+import { QueryBuilderWebviewProvider } from './webview/QueryBuilderWebviewProvider.js';
+import { ExplainWebviewProvider } from './webview/ExplainWebviewProvider.js';
+import { RedisWebviewProvider } from './webview/RedisWebviewProvider.js';
+import { DataSyncWebviewProvider } from './webview/DataSyncWebviewProvider.js';
+import { AiSqlAssistantWebviewProvider } from './webview/AiSqlAssistantWebviewProvider.js';
+import { StatusBarHealthMonitor } from './status/StatusBarHealthMonitor.js';
 import { IconHelper } from './util/IconHelper.js';
 import { t } from './util/i18n.js';
 
@@ -30,10 +37,10 @@ export function activate(context: vscode.ExtensionContext) {
   const storageService = new ConnectionStorageService(context);
   const treeProvider = new DatabaseTreeProvider(context, storageService);
 
-  // Register tree view IDs
-  vscode.window.registerTreeDataProvider('database-client-explorer', treeProvider);
-  vscode.window.registerTreeDataProvider('dbClientView', treeProvider);
-  vscode.window.registerTreeDataProvider('anarchy-database-client-explorer', treeProvider);
+  // Register Tree View
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider('database-client-explorer', treeProvider)
+  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand('dbClient.addConnection', () => {
@@ -74,6 +81,12 @@ export function activate(context: vscode.ExtensionContext) {
           vscode.window.showInformationMessage(t(`Deleted "${node.config.name}"`, `Удалено "${node.config.name}"`));
         }
       }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.refreshTree', () => {
+      treeProvider.refresh();
     })
   );
 
@@ -221,7 +234,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('dbClient.queryConsole', async (node: ConnectionNode | DatabaseNode) => {
       if (node) {
-        const config = node.connectionConfig || (node as ConnectionNode).config;
+        const config = (node as DatabaseNode).connectionConfig || (node as ConnectionNode).config;
         const pass = (node as ConnectionNode).password;
         const sshPass = (node as ConnectionNode).sshPassword;
         TableWebviewProvider.openQueryConsole(config, pass, sshPass);
@@ -232,7 +245,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('dbClient.dumpDatabase', async (node: ConnectionNode | DatabaseNode) => {
       if (node) {
-        const config = node.connectionConfig || (node as ConnectionNode).config;
+        const config = (node as DatabaseNode).connectionConfig || (node as ConnectionNode).config;
         const pass = (node as ConnectionNode).password;
         const sshPass = (node as ConnectionNode).sshPassword;
         await DatabaseDumpService.dumpDatabase(config, pass, sshPass);
@@ -243,7 +256,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('dbClient.importSql', async (node: ConnectionNode | DatabaseNode) => {
       if (node) {
-        const config = node.connectionConfig || (node as ConnectionNode).config;
+        const config = (node as DatabaseNode).connectionConfig || (node as ConnectionNode).config;
         const pass = (node as ConnectionNode).password;
         const sshPass = (node as ConnectionNode).sshPassword;
         await DatabaseDumpService.importSqlFile(config, pass, sshPass);
@@ -252,9 +265,12 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('dbClient.openErd', async (node: DatabaseNode) => {
+    vscode.commands.registerCommand('dbClient.openErd', async (node?: ConnectionNode | DatabaseNode) => {
       if (node) {
-        await ErdWebviewProvider.show(node.connectionConfig, node.password, node.sshPassword);
+        const config = (node as DatabaseNode).connectionConfig || (node as ConnectionNode).config;
+        const pass = (node as ConnectionNode).password;
+        const sshPass = (node as ConnectionNode).sshPassword;
+        await ErdWebviewProvider.show(config, pass, sshPass);
       }
     })
   );
@@ -278,7 +294,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('dbClient.newQuery', async (node?: ConnectionNode | DatabaseNode) => {
       if (node) {
-        const config = node.connectionConfig || (node as ConnectionNode).config;
+        const config = (node as DatabaseNode).connectionConfig || (node as ConnectionNode).config;
         const pass = (node as ConnectionNode).password;
         TableWebviewProvider.openQueryConsole(config, pass);
       } else {
@@ -286,6 +302,78 @@ export function activate(context: vscode.ExtensionContext) {
         const doc = await vscode.workspace.openTextDocument({ language: 'sql', content: sqlComment });
         await vscode.window.showTextDocument(doc);
       }
+    })
+  );
+
+  // Initialize Status Bar Health Monitor
+  StatusBarHealthMonitor.getInstance().init(context, storageService);
+
+  // Feature Commands (1-7)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.schemaDiff', async (node?: ConnectionNode | DatabaseNode) => {
+      const config = node ? (node as DatabaseNode).connectionConfig || (node as ConnectionNode).config : undefined;
+      await SchemaDiffWebviewProvider.show(context, storageService, config);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.queryBuilder', async (node?: ConnectionNode | DatabaseNode) => {
+      if (node) {
+        const config = (node as DatabaseNode).connectionConfig || (node as ConnectionNode).config;
+        const pass = (node as ConnectionNode).password;
+        const sshPass = (node as ConnectionNode).sshPassword;
+        await QueryBuilderWebviewProvider.show(config, pass, sshPass);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.explainQuery', async (node?: ConnectionNode | DatabaseNode) => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) return;
+      const sql = editor.selection.isEmpty ? editor.document.getText() : editor.document.getText(editor.selection);
+      if (!sql.trim()) return;
+
+      let config = node ? (node as DatabaseNode).connectionConfig || (node as ConnectionNode).config : undefined;
+      let pass = node ? (node as ConnectionNode).password : undefined;
+      let sshPass = node ? (node as ConnectionNode).sshPassword : undefined;
+
+      if (!config) {
+        const connections = storageService.getConnections();
+        if (connections.length > 0) {
+          config = connections[0];
+          pass = await storageService.getPassword(config.id);
+          sshPass = await storageService.getSshPassword(config.id);
+        }
+      }
+      if (config) {
+        await ExplainWebviewProvider.show(config, sql, pass, sshPass);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.openRedisEditor', async (node: ConnectionNode) => {
+      if (node) {
+        await RedisWebviewProvider.show(node.config, node.password, node.sshPassword);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.compareData', async (node: TableNode) => {
+      if (node && node.table) {
+        await DataSyncWebviewProvider.show(context, storageService, node.connectionConfig, node.table.name);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.aiAssistant', async (node?: ConnectionNode | DatabaseNode) => {
+      const config = node ? (node as DatabaseNode).connectionConfig || (node as ConnectionNode).config : undefined;
+      const pass = node ? (node as ConnectionNode).password : undefined;
+      const sshPass = node ? (node as ConnectionNode).sshPassword : undefined;
+      await AiSqlAssistantWebviewProvider.show(config, pass, sshPass);
     })
   );
 
@@ -310,5 +398,6 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {
+  StatusBarHealthMonitor.getInstance().dispose();
   DriverManager.getInstance().disconnectAll();
 }

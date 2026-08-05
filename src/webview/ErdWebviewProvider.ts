@@ -24,18 +24,27 @@ export class ErdWebviewProvider {
       const allRelations = [];
 
       for (const tbl of tables.slice(0, 30)) {
-        const columns = await driver.getColumns(tbl.name, connectionConfig.database, tbl.schema);
-        const fks = await driver.getForeignKeys(tbl.name, connectionConfig.database, tbl.schema);
+        try {
+          const columns = await driver.getColumns(tbl.name, connectionConfig.database, tbl.schema);
+          let fks: any[] = [];
+          try {
+            fks = await driver.getForeignKeys(tbl.name, connectionConfig.database, tbl.schema);
+          } catch (e) {
+            // Ignore FK errors for specific tables/views
+          }
 
-        tableDataList.push({ name: tbl.name, schema: tbl.schema, columns, foreignKeys: fks });
+          tableDataList.push({ name: tbl.name, schema: tbl.schema, columns, foreignKeys: fks });
 
-        for (const fk of fks) {
-          allRelations.push({
-            fromTable: tbl.name,
-            fromCol: fk.columnName,
-            toTable: fk.foreignTableName,
-            toCol: fk.foreignColumnName,
-          });
+          for (const fk of fks) {
+            allRelations.push({
+              fromTable: tbl.name,
+              fromCol: fk.columnName,
+              toTable: fk.referencedTable || fk.foreignTableName,
+              toCol: fk.referencedColumn || fk.foreignColumnName,
+            });
+          }
+        } catch (tblErr) {
+          console.warn(`Failed to inspect table ${tbl.name} for ERD:`, tblErr);
         }
       }
 
