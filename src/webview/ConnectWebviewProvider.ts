@@ -50,12 +50,12 @@ export class ConnectWebviewProvider {
             const password = message.data.password;
             const sshPassword = message.data.sshPassword;
 
-            await storageService.saveConnection(config);
+            const savedProfile = await storageService.saveConnection(config, password, sshPassword);
             if (password !== undefined) {
-              await storageService.savePassword(config.id, password);
+              await storageService.savePassword(savedProfile.id, password);
             }
             if (sshPassword !== undefined) {
-              await storageService.saveSshPassword(config.id, sshPassword);
+              await storageService.saveSshPassword(savedProfile.id, sshPassword);
             }
 
             vscode.window.showInformationMessage(

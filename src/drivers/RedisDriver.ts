@@ -1,10 +1,9 @@
-import Redis from 'ioredis';
 import { BaseDriver } from './BaseDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
 
 export class RedisDriver extends BaseDriver {
-  private client: Redis | null = null;
+  private client: any = null;
 
   constructor(config: ConnectionConfig, password?: string) {
     super(config, password);
@@ -14,7 +13,14 @@ export class RedisDriver extends BaseDriver {
     if (this.client) {
       await this.disconnect();
     }
-    this.client = new Redis({
+    let RedisClass: any;
+    try {
+      const ioredisModule = require('ioredis');
+      RedisClass = ioredisModule.default || ioredisModule;
+    } catch (e) {
+      throw new Error('Модуль "ioredis" не установлен. Пожалуйста, выполните npm install ioredis.');
+    }
+    this.client = new RedisClass({
       host: this.config.host || '127.0.0.1',
       port: this.config.port || 6379,
       password: this.password || undefined,

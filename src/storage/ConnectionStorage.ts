@@ -59,8 +59,20 @@ export class ConnectionStorageService {
     return await this.context.secrets.get(`password_${id}`);
   }
 
+  public async savePassword(id: string, password: string): Promise<void> {
+    if (password !== undefined && password !== '') {
+      await this.context.secrets.store(`password_${id}`, password);
+    }
+  }
+
   public async getSshPassword(id: string): Promise<string | undefined> {
     return await this.context.secrets.get(`ssh_password_${id}`);
+  }
+
+  public async saveSshPassword(id: string, password: string): Promise<void> {
+    if (password !== undefined && password !== '') {
+      await this.context.secrets.store(`ssh_password_${id}`, password);
+    }
   }
 
   public async deleteConnection(id: string): Promise<void> {

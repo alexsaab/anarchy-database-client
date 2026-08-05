@@ -12,7 +12,7 @@ async function main() {
     sourcesContent: false,
     platform: 'node',
     outfile: 'out/extension.js',
-    external: ['vscode', 'sqlite3', 'pg-native', 'cardinal', 'cpu-features'],
+    external: ['vscode', 'sqlite3', 'pg-native', 'cardinal', 'cpu-features', 'ioredis', '@elastic/elasticsearch'],
     logLevel: 'info',
   });
 

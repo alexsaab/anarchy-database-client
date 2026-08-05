@@ -22,10 +22,18 @@ export class ConnectionNode extends BaseNode {
   }
 
   getTreeItem(): vscode.TreeItem {
-    const item = new vscode.TreeItem(this.label, vscode.TreeItemCollapsibleState.Collapsed);
+    const badge = IconHelper.getColorBadge(this.config.color);
+    const labelText = badge ? `${badge} ${this.config.name}` : this.config.name;
+
+    const item = new vscode.TreeItem(labelText, vscode.TreeItemCollapsibleState.Collapsed);
     item.description = `${this.config.type} (${this.config.host || 'local'}:${this.config.port || ''})`;
 
-    item.iconPath = IconHelper.getConnectionIcon(this.config.type, this.isConnected);
+    const themeColor = IconHelper.getThemeColor(this.config.color);
+    if (themeColor) {
+      item.iconPath = new vscode.ThemeIcon(this.isConnected ? 'database' : 'server', themeColor);
+    } else {
+      item.iconPath = IconHelper.getConnectionIcon(this.config.type, this.isConnected);
+    }
     item.contextValue = 'connectionNode';
     return item;
   }

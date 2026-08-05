@@ -1,10 +1,9 @@
-import { Client } from '@elastic/elasticsearch';
 import { BaseDriver } from './BaseDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
 
 export class ElasticsearchDriver extends BaseDriver {
-  private client: Client | null = null;
+  private client: any = null;
 
   constructor(config: ConnectionConfig, password?: string) {
     super(config, password);
@@ -25,7 +24,15 @@ export class ElasticsearchDriver extends BaseDriver {
       headers['authorization'] = `Basic ${basicAuth}`;
     }
 
-    this.client = new Client({
+    let ClientClass: any;
+    try {
+      const elasticModule = require('@elastic/elasticsearch');
+      ClientClass = elasticModule.Client;
+    } catch (e) {
+      throw new Error('Модуль "@elastic/elasticsearch" не установлен. Пожалуйста, выполните npm install @elastic/elasticsearch.');
+    }
+
+    this.client = new ClientClass({
       node,
       headers,
       auth:
