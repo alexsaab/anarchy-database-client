@@ -1,7 +1,7 @@
 {
-  "name": "vscode-database-client-clone",
+  "name": "anarchy-database-client",
   "displayName": "Anarchy Database Client",
-  "description": "Полнофункциональный клиент баз данных для VS Code (клон cweijan.vscode-database-client2)",
+  "description": "Anarchy Database Client — полнофункциональное расширение клиенту баз данных для VS Code",
   "version": "0.4.0",
   "publisher": "custom-developer",
   "repository": {

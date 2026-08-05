@@ -1,6 +1,6 @@
 {
-  "viewsContainer.databaseClient": "Database Client",
-  "view.databaseExplorer": "Database Explorer",
+  "viewsContainer.databaseClient": "Anarchy Database Client",
+  "view.databaseExplorer": "Anarchy DB Explorer",
   "command.addConnection": "Add Connection",
   "command.editConnection": "Edit Connection",
   "command.deleteConnection": "Delete Connection",

@@ -1,6 +1,6 @@
 {
-  "viewsContainer.databaseClient": "Клиент Баз Данных",
-  "view.databaseExplorer": "Проводник Баз Данных",
+  "viewsContainer.databaseClient": "Anarchy Database Client",
+  "view.databaseExplorer": "Anarchy DB Проводник",
   "command.addConnection": "Добавить Подключение",
   "command.editConnection": "Редактировать Подключение",
   "command.deleteConnection": "Удалить Подключение",
