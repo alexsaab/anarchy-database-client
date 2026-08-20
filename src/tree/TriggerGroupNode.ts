@@ -31,6 +31,7 @@ export class TriggerGroupNode extends BaseNode {
     try {
       const driver = await DriverManager.getInstance().getDriver(this.connectionConfig, this.password, this.sshPassword);
       const triggers = await driver.getTriggers(this.connectionConfig.database, this.schemaName);
+      triggers.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
       return triggers.map((t) => new ScriptNode(t.name, 'trigger', this.connectionConfig, this.password, this.sshPassword, this.schemaName, this));
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to fetch triggers: ${err.message}`);

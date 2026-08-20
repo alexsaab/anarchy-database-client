@@ -84,7 +84,8 @@ export class ElasticsearchDriver extends BaseDriver {
       .map((idx: any) => ({
         name: idx.index,
         type: 'table',
-      }));
+      }))
+      .sort((a: any, b: any) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   }
 
   async getColumns(indexName: string): Promise<ColumnInfo[]> {

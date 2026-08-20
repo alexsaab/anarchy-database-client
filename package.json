@@ -39,6 +39,11 @@
     },
     "commands": [
       {
+        "command": "dbClient.reconnectConnection",
+        "title": "%command.reconnectConnection%",
+        "icon": "$(sync)"
+      },
+      {
         "command": "dbClient.addConnection",
         "title": "%command.addConnection%",
         "icon": "$(add)"
@@ -304,6 +309,16 @@
           "group": "1_table@2"
         },
         {
+          "command": "dbClient.reconnectConnection",
+          "when": "view == database-client-explorer && viewItem == connectionNode",
+          "group": "inline@0"
+        },
+        {
+          "command": "dbClient.reconnectConnection",
+          "when": "view == database-client-explorer && viewItem == connectionNode",
+          "group": "z_config@0"
+        },
+        {
           "command": "dbClient.editConnection",
           "when": "view == database-client-explorer && viewItem == connectionNode",
           "group": "z_config@1"
@@ -319,7 +334,8 @@
   "scripts": {
     "vscode:prepublish": "npm run build",
     "build": "node esbuild.js",
-    "watch": "node esbuild.js --watch"
+    "watch": "node esbuild.js --watch",
+    "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

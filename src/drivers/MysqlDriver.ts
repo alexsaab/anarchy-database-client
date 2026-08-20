@@ -85,7 +85,8 @@ export class MysqlDriver extends BaseDriver {
     const rows = results as any[];
     return rows
       .map((r: any) => r.Database || r.database || Object.values(r)[0])
-      .filter((db: any) => db && !['information_schema', 'mysql', 'performance_schema', 'sys'].includes(String(db)));
+      .filter((db: any) => db && !['information_schema', 'mysql', 'performance_schema', 'sys'].includes(String(db)))
+      .sort((a: string, b: string) => a.localeCompare(b, undefined, { numeric: true }));
   }
 
   async getTables(databaseName?: string): Promise<TableInfo[]> {
@@ -100,7 +101,7 @@ export class MysqlDriver extends BaseDriver {
     }
 
     const [results] = await this.queryWithRetry(
-      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${targetDb}' AND TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VIEW', 'SYSTEM TABLE');`
+      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${targetDb}' AND TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VIEW', 'SYSTEM TABLE') ORDER BY TABLE_NAME;`
     );
 
     const rows = results as any[];
@@ -122,7 +123,7 @@ export class MysqlDriver extends BaseDriver {
     }
 
     const [results] = await this.queryWithRetry(
-      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${targetDb}' AND TABLE_TYPE = 'VIEW';`
+      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${targetDb}' AND TABLE_TYPE = 'VIEW' ORDER BY TABLE_NAME;`
     );
 
     const rows = results as any[];
@@ -137,7 +138,7 @@ export class MysqlDriver extends BaseDriver {
     if (!targetDb) return [];
 
     const [results] = await this.queryWithRetry(
-      `SELECT ROUTINE_NAME, ROUTINE_COMMENT FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '${targetDb}' AND ROUTINE_TYPE = 'FUNCTION';`
+      `SELECT ROUTINE_NAME, ROUTINE_COMMENT FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '${targetDb}' AND ROUTINE_TYPE = 'FUNCTION' ORDER BY ROUTINE_NAME;`
     );
 
     const rows = results as any[];
@@ -153,7 +154,7 @@ export class MysqlDriver extends BaseDriver {
     if (!targetDb) return [];
 
     const [results] = await this.queryWithRetry(
-      `SELECT ROUTINE_NAME, ROUTINE_COMMENT FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '${targetDb}' AND ROUTINE_TYPE = 'PROCEDURE';`
+      `SELECT ROUTINE_NAME, ROUTINE_COMMENT FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '${targetDb}' AND ROUTINE_TYPE = 'PROCEDURE' ORDER BY ROUTINE_NAME;`
     );
 
     const rows = results as any[];
@@ -169,7 +170,7 @@ export class MysqlDriver extends BaseDriver {
     if (!targetDb) return [];
 
     const [results] = await this.queryWithRetry(
-      `SELECT TRIGGER_NAME, EVENT_OBJECT_TABLE, ACTION_TIMING, EVENT_MANIPULATION FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = '${targetDb}';`
+      `SELECT TRIGGER_NAME, EVENT_OBJECT_TABLE, ACTION_TIMING, EVENT_MANIPULATION FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = '${targetDb}' ORDER BY TRIGGER_NAME;`
     );
 
     const rows = results as any[];
@@ -298,8 +299,8 @@ export class MysqlDriver extends BaseDriver {
 
   async getTableData(tableName: string, params: PageParams, schemaName?: string): Promise<QueryResult> {
     const offset = (params.page - 1) * params.pageSize;
-    const db = this.config.database;
-    const tableRef = `\`${tableName}\``;
+    const db = this.config.database || schemaName;
+    const tableRef = db ? `\`${db}\`.\`${tableName}\`` : `\`${tableName}\``;
 
     let sql = `SELECT * FROM ${tableRef}`;
     let countSql = `SELECT COUNT(*) as total FROM ${tableRef}`;
@@ -309,11 +310,12 @@ export class MysqlDriver extends BaseDriver {
       countSql += ` WHERE ${params.filterSql}`;
     }
 
-    sql += ` LIMIT ${params.pageSize} OFFSET ${offset};`;
-
-    if (db) {
-      await this.executeQuery(`USE \`${db}\`;`);
+    if (params.sortField) {
+      const order = params.sortOrder === 'DESC' ? 'DESC' : 'ASC';
+      sql += ` ORDER BY \`${params.sortField}\` ${order}`;
     }
+
+    sql += ` LIMIT ${params.pageSize} OFFSET ${offset};`;
 
     const countRes = await this.executeQuery(countSql);
     const totalCount = parseInt(countRes.rows[0]?.total || '0', 10);

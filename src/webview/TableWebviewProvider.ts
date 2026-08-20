@@ -7,6 +7,8 @@ import { ExportService } from '../export/ExportService.js';
 import { isRussian, t } from '../util/i18n.js';
 
 export class TableWebviewProvider {
+  private static activePanels: Map<string, vscode.WebviewPanel> = new Map();
+
   private static quoteId(dbType: string, name: string): string {
     if (dbType === 'MySQL') {
       return `\`${name}\``;
@@ -14,9 +16,9 @@ export class TableWebviewProvider {
     return `"${name}"`;
   }
 
-  private static formatTableRef(dbType: string, tableName: string, schemaName?: string): string {
+  private static formatTableRef(dbType: string, tableName: string, schemaName?: string, databaseName?: string): string {
     if (dbType === 'MySQL') {
-      return `\`${tableName}\``;
+      return databaseName ? `\`${databaseName}\`.\`${tableName}\`` : `\`${tableName}\``;
     }
     if (dbType === 'SQLite') {
       return `"${tableName}"`;
@@ -26,7 +28,22 @@ export class TableWebviewProvider {
   }
 
   public static openTable(tableNode: TableNode) {
-    const title = t(`Data: ${tableNode.table.name}`, `Данные: ${tableNode.table.name}`);
+    const connectionConfig = tableNode.connectionConfig;
+    const tableName = tableNode.table.name;
+    const schemaName = tableNode.table.schema || 'public';
+    const password = tableNode.password;
+    const sshPassword = tableNode.sshPassword;
+    const panelKey = `${connectionConfig.id}_${connectionConfig.database || ''}_${schemaName}_${tableName}`;
+
+    const existingPanel = TableWebviewProvider.activePanels.get(panelKey);
+    if (existingPanel) {
+      try {
+        existingPanel.dispose();
+      } catch (e) {}
+      TableWebviewProvider.activePanels.delete(panelKey);
+    }
+
+    const title = t(`Data: ${tableName}`, `Данные: ${tableName}`);
     const panel = vscode.window.createWebviewPanel(
       'dbClientDataGrid',
       title,
@@ -37,11 +54,10 @@ export class TableWebviewProvider {
       }
     );
 
-    const connectionConfig = tableNode.connectionConfig;
-    const tableName = tableNode.table.name;
-    const schemaName = tableNode.table.schema || 'public';
-    const password = tableNode.password;
-    const sshPassword = tableNode.sshPassword;
+    TableWebviewProvider.activePanels.set(panelKey, panel);
+    panel.onDidDispose(() => {
+      TableWebviewProvider.activePanels.delete(panelKey);
+    });
 
     let currentParams: PageParams = {
       page: 1,
@@ -54,14 +70,56 @@ export class TableWebviewProvider {
       try {
         const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
         const result = await driver.getTableData(tableName, currentParams, schemaName);
-        lastResult = result;
+        
+        let fields = result.fields || [];
+        if (fields.length === 0 && (result.rows || []).length > 0) {
+          fields = Object.keys(result.rows[0]).map((k) => ({
+            name: k,
+            type: 'VARCHAR',
+            nullable: true,
+          }));
+        }
+
+        // Sanitize rows for postMessage (handling BigInt, Date, Buffer, objects, etc.)
+        const sanitizedRows = (result.rows || []).map((row: any) => {
+          if (!row || typeof row !== 'object') return row;
+          const sanitized: any = {};
+          for (const k of Object.keys(row)) {
+            const v = row[k];
+            if (typeof v === 'bigint') {
+              sanitized[k] = v.toString();
+            } else if (v instanceof Date) {
+              sanitized[k] = v.toISOString();
+            } else if (Buffer.isBuffer(v)) {
+              sanitized[k] = v.toString('hex');
+            } else if (typeof v === 'object' && v !== null) {
+              try {
+                sanitized[k] = JSON.stringify(v);
+              } catch (e) {
+                sanitized[k] = String(v);
+              }
+            } else {
+              sanitized[k] = v;
+            }
+          }
+          return sanitized;
+        });
+
+        const safeResult: QueryResult = {
+          ...result,
+          fields,
+          rows: sanitizedRows,
+        };
+
+        lastResult = safeResult;
         panel.webview.postMessage({
           type: 'renderData',
           tableName,
-          result,
+          result: safeResult,
           params: currentParams,
         });
       } catch (err: any) {
+        vscode.window.showErrorMessage(`Failed to load data for ${tableName}: ${err.message}`);
         panel.webview.postMessage({
           type: 'error',
           message: err.message,
@@ -71,7 +129,7 @@ export class TableWebviewProvider {
 
     panel.webview.onDidReceiveMessage(async (msg) => {
       const dbType = connectionConfig.type;
-      const tableRef = TableWebviewProvider.formatTableRef(dbType, tableName, schemaName);
+      const tableRef = TableWebviewProvider.formatTableRef(dbType, tableName, schemaName, connectionConfig.database);
 
       switch (msg.type) {
         case 'fetchData':
@@ -140,7 +198,9 @@ export class TableWebviewProvider {
     });
 
     panel.webview.html = TableWebviewProvider.getHtml(tableName);
-    loadData();
+    setTimeout(() => {
+      loadData();
+    }, 200);
   }
 
   public static openQueryConsole(connectionConfig: ConnectionConfig, password?: string, sshPassword?: string) {
@@ -282,6 +342,23 @@ export class TableWebviewProvider {
       background: var(--vscode-editorHeader-noTabsBackground, #252526);
       font-weight: 600;
     }
+    th.sortable {
+      cursor: pointer;
+      user-select: none;
+      transition: background-color 0.15s;
+    }
+    th.sortable:hover {
+      background: var(--vscode-list-hoverBackground, #37373d);
+    }
+    .sort-icon {
+      font-size: 11px;
+      margin-left: 4px;
+      opacity: 0.6;
+    }
+    th.sorted .sort-icon {
+      opacity: 1;
+      color: var(--vscode-textLink-activeForeground, #3794ff);
+    }
     td.editable:hover {
       background-color: var(--vscode-list-hoverBackground, rgba(255,255,255,0.1));
       cursor: pointer;
@@ -400,6 +477,32 @@ export class TableWebviewProvider {
     let currentFields = [];
     let allRows = [];
 
+    let currentSortField = null;
+    let currentSortOrder = null;
+
+    function toggleSort(fieldName) {
+      if (currentSortField === fieldName) {
+        if (currentSortOrder === 'ASC') {
+          currentSortOrder = 'DESC';
+        } else if (currentSortOrder === 'DESC') {
+          currentSortField = null;
+          currentSortOrder = null;
+        }
+      } else {
+        currentSortField = fieldName;
+        currentSortOrder = 'ASC';
+      }
+
+      vscode.postMessage({
+        type: 'fetchData',
+        params: {
+          page: 1,
+          sortField: currentSortField || undefined,
+          sortOrder: currentSortOrder || undefined,
+        }
+      });
+    }
+
     function exportData(format) {
       vscode.postMessage({ type: 'export', format });
     }
@@ -421,12 +524,27 @@ export class TableWebviewProvider {
     }
 
     document.getElementById('refreshBtn').onclick = () => {
-      vscode.postMessage({ type: 'fetchData', params: { page: currentPage } });
+      vscode.postMessage({
+        type: 'fetchData',
+        params: {
+          page: currentPage,
+          sortField: currentSortField || undefined,
+          sortOrder: currentSortOrder || undefined,
+        }
+      });
     };
 
     document.getElementById('filterBtn').onclick = () => {
       const filterSql = document.getElementById('sqlFilterInput').value.trim();
-      vscode.postMessage({ type: 'fetchData', params: { page: 1, filterSql } });
+      vscode.postMessage({
+        type: 'fetchData',
+        params: {
+          page: 1,
+          filterSql,
+          sortField: currentSortField || undefined,
+          sortOrder: currentSortOrder || undefined,
+        }
+      });
     };
 
     document.getElementById('quickSearchInput').oninput = (e) => {
@@ -440,15 +558,15 @@ export class TableWebviewProvider {
     document.getElementById('addRowBtn').onclick = () => {
       if (currentFields.length === 0) return;
 
-      let fieldsHtml = currentFields.map(f => \`
-        <div class="modal-form-group">
-          <label>\${f.name} (\${f.type})</label>
-          <div style="display:flex; gap:10px; align-items:center;">
-            <input type="text" id="add_col_\${f.name}" placeholder="Value..." style="flex:1;">
-            <label style="font-weight:normal; font-size:11px;"><input type="checkbox" id="add_null_\${f.name}" onchange="document.getElementById('add_col_\${f.name}').disabled = this.checked;"> NULL</label>
-          </div>
-        </div>
-      \`).join('');
+      let fieldsHtml = currentFields.map(f =>
+        '<div class="modal-form-group">' +
+          '<label>' + f.name + ' (' + f.type + ')</label>' +
+          '<div style="display:flex; gap:10px; align-items:center;">' +
+            '<input type="text" id="add_col_' + f.name + '" placeholder="Value..." style="flex:1;">' +
+            '<label style="font-weight:normal; font-size:11px;"><input type="checkbox" id="add_null_' + f.name + '" onchange="document.getElementById(\'add_col_' + f.name + '\').disabled = this.checked;"> NULL</label>' +
+          '</div>' +
+        '</div>'
+      ).join('');
 
       openModal('${text.addRow}', fieldsHtml, () => {
         const rowData = {};
@@ -468,28 +586,41 @@ export class TableWebviewProvider {
     document.getElementById('prevBtn').onclick = () => {
       if (currentPage > 1) {
         currentPage--;
-        vscode.postMessage({ type: 'fetchData', params: { page: currentPage } });
+        vscode.postMessage({
+          type: 'fetchData',
+          params: {
+            page: currentPage,
+            sortField: currentSortField || undefined,
+            sortOrder: currentSortOrder || undefined,
+          }
+        });
       }
     };
 
     document.getElementById('nextBtn').onclick = () => {
       if (currentPage * pageSize < totalCount) {
         currentPage++;
-        vscode.postMessage({ type: 'fetchData', params: { page: currentPage } });
+        vscode.postMessage({
+          type: 'fetchData',
+          params: {
+            page: currentPage,
+            sortField: currentSortField || undefined,
+            sortOrder: currentSortOrder || undefined,
+          }
+        });
       }
     };
 
     function editCell(colName, pkCol, pkVal, currentVal) {
       const isNull = currentVal === 'null';
-      const html = \`
-        <div class="modal-form-group">
-          <label>Value for "\${colName}":</label>
-          <textarea id="cellValInput" style="width:100%; height:90px;" \${isNull ? 'disabled' : ''}>\${isNull ? '' : currentVal}</textarea>
-          <div style="margin-top:8px;">
-            <label style="font-size:12px; font-weight:normal;"><input type="checkbox" id="cellSetNullCheckbox" \${isNull ? 'checked' : ''} onchange="document.getElementById('cellValInput').disabled = this.checked;"> ${text.setNull}</label>
-          </div>
-        </div>
-      \`;
+      const html =
+        '<div class="modal-form-group">' +
+          '<label>Value for "' + colName + '":</label>' +
+          '<textarea id="cellValInput" style="width:100%; height:90px;" ' + (isNull ? 'disabled' : '') + '>' + (isNull ? '' : currentVal) + '</textarea>' +
+          '<div style="margin-top:8px;">' +
+            '<label style="font-size:12px; font-weight:normal;"><input type="checkbox" id="cellSetNullCheckbox" ' + (isNull ? 'checked' : '') + ' onchange="document.getElementById(\'cellValInput\').disabled = this.checked;"> ${text.setNull}</label>' +
+          '</div>' +
+        '</div>';
 
       openModal('${ru ? 'Редактировать ячейку' : 'Edit Cell'}: ' + colName, html, () => {
         const setNull = document.getElementById('cellSetNullCheckbox').checked;
@@ -499,7 +630,7 @@ export class TableWebviewProvider {
     }
 
     function deleteRow(pkCol, pkVal) {
-      const html = \`<p>${ru ? 'Удалить строку с первичным ключом' : 'Delete row with PK'} <b>\${pkCol} = \${pkVal}</b>?</p>\`;
+      const html = '<p>${ru ? 'Удалить строку с первичным ключом' : 'Delete row with PK'} <b>' + pkCol + ' = ' + pkVal + '</b>?</p>';
       openModal('${ru ? 'Подтвердите удаление' : 'Confirm Deletion'}', html, () => {
         vscode.postMessage({ type: 'deleteRow', pkColumn: pkCol, pkValue: pkVal });
       });
@@ -508,15 +639,45 @@ export class TableWebviewProvider {
     function renderRows(rows) {
       const pkField = currentFields.find(f => f.isPrimaryKey) || currentFields[0];
       const body = document.getElementById('tableBody');
-      body.innerHTML = rows.map((row, idx) => {
+      body.innerHTML = '';
+
+      rows.forEach((row, idx) => {
+        const tr = document.createElement('tr');
+
+        const tdIdx = document.createElement('td');
+        tdIdx.textContent = (currentPage - 1) * pageSize + idx + 1;
+        tr.appendChild(tdIdx);
+
         const pkVal = pkField ? row[pkField.name] : idx;
-        const cells = currentFields.map(f => {
+
+        currentFields.forEach(f => {
+          const td = document.createElement('td');
+          td.className = 'editable';
           const val = row[f.name];
-          const valStr = val === null ? 'null' : String(val);
-          return \`<td class="editable" onclick="editCell('\${f.name}', '\${pkField ? pkField.name : ''}', '\${pkVal}', '\${valStr.replace(/'/g, "\\\\'")}')">\${val === null ? '<i>null</i>' : valStr}</td>\`;
-        }).join('');
-        return \`<tr><td>\${(currentPage - 1) * pageSize + idx + 1}</td>\${cells}<td><button class="danger" onclick="deleteRow('\${pkField ? pkField.name : ''}', '\${pkVal}')">🗑️</button></td></tr>\`;
-      }).join('');
+          if (val === null || val === undefined) {
+            td.innerHTML = '<i>null</i>';
+          } else {
+            td.textContent = String(val);
+          }
+          td.onclick = () => {
+            const valStr = val === null || val === undefined ? 'null' : String(val);
+            editCell(f.name, pkField ? pkField.name : '', pkVal, valStr);
+          };
+          tr.appendChild(td);
+        });
+
+        const tdAction = document.createElement('td');
+        const delBtn = document.createElement('button');
+        delBtn.className = 'danger';
+        delBtn.textContent = '🗑️';
+        delBtn.onclick = () => {
+          deleteRow(pkField ? pkField.name : '', pkVal);
+        };
+        tdAction.appendChild(delBtn);
+        tr.appendChild(tdAction);
+
+        body.appendChild(tr);
+      });
     }
 
     window.addEventListener('message', event => {
@@ -537,15 +698,46 @@ export class TableWebviewProvider {
         currentFields = res.fields;
         allRows = res.rows || [];
 
+        if (msg.params) {
+          currentSortField = msg.params.sortField || null;
+          currentSortOrder = msg.params.sortOrder || null;
+        }
+
         document.getElementById('pageInfo').innerText = currentPage + ' / ' + Math.max(1, Math.ceil(totalCount / pageSize));
-        document.getElementById('stats').innerText = \`${text.stats}: \${totalCount} | ${text.time}: \${res.costTimeMs}ms\`;
+        document.getElementById('stats').innerText = '${text.stats}: ' + totalCount + ' | ${text.time}: ' + res.costTimeMs + 'ms';
 
         const headTr = document.getElementById('tableHead');
-        headTr.innerHTML = '<th>#</th>' + res.fields.map(f => \`<th>\${f.name}</th>\`).join('') + '<th>Action</th>';
+        headTr.innerHTML = '';
+
+        const thNum = document.createElement('th');
+        thNum.textContent = '#';
+        headTr.appendChild(thNum);
+
+        const sortTitlePrefix = '${ru ? 'Нажмите для сортировки по полю' : 'Click to sort by'}';
+        res.fields.forEach(f => {
+          const th = document.createElement('th');
+          th.className = 'sortable';
+          let sortIcon = '⬍';
+          if (currentSortField === f.name) {
+            th.classList.add('sorted');
+            sortIcon = currentSortOrder === 'ASC' ? '▲' : '▼';
+          }
+          th.title = sortTitlePrefix + ' ' + f.name;
+          th.innerHTML = f.name + ' <span class="sort-icon">' + sortIcon + '</span>';
+          th.onclick = () => toggleSort(f.name);
+          headTr.appendChild(th);
+        });
+
+        const thAction = document.createElement('th');
+        thAction.textContent = 'Action';
+        headTr.appendChild(thAction);
 
         renderRows(allRows);
       }
     });
+
+    // Automatically trigger initial load when webview is ready
+    vscode.postMessage({ type: 'fetchData', params: { page: 1 } });
   </script>
 </body>
 </html>`;

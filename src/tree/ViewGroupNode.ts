@@ -31,6 +31,7 @@ export class ViewGroupNode extends BaseNode {
     try {
       const driver = await DriverManager.getInstance().getDriver(this.connectionConfig, this.password, this.sshPassword);
       const views = await driver.getViews(this.connectionConfig.database, this.schemaName);
+      views.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
       return views.map((v) => new TableNode(v, this.connectionConfig, this.password, this.sshPassword, this));
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to fetch views: ${err.message}`);

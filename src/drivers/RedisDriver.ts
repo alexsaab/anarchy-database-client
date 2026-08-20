@@ -62,10 +62,13 @@ export class RedisDriver extends BaseDriver {
       await this.connect();
     }
     const keys = await this.client!.keys('*');
-    return keys.slice(0, 100).map((k: string) => ({
-      name: k,
-      type: 'table',
-    }));
+    return keys
+      .slice(0, 100)
+      .sort((a: string, b: string) => a.localeCompare(b, undefined, { numeric: true }))
+      .map((k: string) => ({
+        name: k,
+        type: 'table',
+      }));
   }
 
   async getColumns(keyName: string): Promise<ColumnInfo[]> {

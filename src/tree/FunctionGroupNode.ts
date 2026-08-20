@@ -31,6 +31,7 @@ export class FunctionGroupNode extends BaseNode {
     try {
       const driver = await DriverManager.getInstance().getDriver(this.connectionConfig, this.password, this.sshPassword);
       const funcs = await driver.getFunctions(this.connectionConfig.database, this.schemaName);
+      funcs.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
       return funcs.map((f) => new ScriptNode(f.name, 'function', this.connectionConfig, this.password, this.sshPassword, this.schemaName, this));
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to fetch functions: ${err.message}`);

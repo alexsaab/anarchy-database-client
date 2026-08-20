@@ -63,7 +63,7 @@ export class SqliteDriver extends BaseDriver {
   }
 
   async getTables(databaseName?: string): Promise<TableInfo[]> {
-    const res = await this.executeQuery("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';");
+    const res = await this.executeQuery("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;");
     return res.rows.map((r: any) => ({
       name: r.name,
       type: 'table',
@@ -71,7 +71,7 @@ export class SqliteDriver extends BaseDriver {
   }
 
   async getViews(databaseName?: string): Promise<TableInfo[]> {
-    const res = await this.executeQuery("SELECT name FROM sqlite_master WHERE type='view';");
+    const res = await this.executeQuery("SELECT name FROM sqlite_master WHERE type='view' ORDER BY name;");
     return res.rows.map((r: any) => ({
       name: r.name,
       type: 'view',
@@ -142,6 +142,11 @@ export class SqliteDriver extends BaseDriver {
     if (params.filterSql) {
       sql += ` WHERE ${params.filterSql}`;
       countSql += ` WHERE ${params.filterSql}`;
+    }
+
+    if (params.sortField) {
+      const order = params.sortOrder === 'DESC' ? 'DESC' : 'ASC';
+      sql += ` ORDER BY "${params.sortField}" ${order}`;
     }
 
     sql += ` LIMIT ${params.pageSize} OFFSET ${offset};`;

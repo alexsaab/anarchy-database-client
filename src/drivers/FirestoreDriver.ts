@@ -81,7 +81,9 @@ export class FirestoreDriver extends BaseDriver {
     try {
       const res = await this.httpPost(':listCollectionIds', {});
       if (res && Array.isArray(res.collectionIds)) {
-        return res.collectionIds.map((id: string) => ({ name: id, type: 'collection' }));
+        return res.collectionIds
+          .map((id: string) => ({ name: id, type: 'collection' }))
+          .sort((a: any, b: any) => a.name.localeCompare(b.name, undefined, { numeric: true }));
       }
     } catch (e) {
       // Fallback sample collection

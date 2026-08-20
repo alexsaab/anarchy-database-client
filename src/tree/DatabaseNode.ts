@@ -42,6 +42,7 @@ export class DatabaseNode extends BaseNode {
       if (dbType === 'PostgreSQL') {
         const driver = await DriverManager.getInstance().getDriver(this.connectionConfig, this.password, this.sshPassword);
         const schemas = await driver.getSchemas(this.dbName);
+        schemas.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 
         if (schemas.length > 1) {
           return [queryGroup, ...schemas.map((s) => new SchemaNode(s, this.connectionConfig, this.context, this.password, this.sshPassword, this))];

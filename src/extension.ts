@@ -85,6 +85,15 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.reconnectConnection', async (node: ConnectionNode) => {
+      if (node && node instanceof ConnectionNode) {
+        await node.reconnect();
+        treeProvider.refresh();
+      }
+    })
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand('dbClient.refreshTree', () => {
       treeProvider.refresh();
     })

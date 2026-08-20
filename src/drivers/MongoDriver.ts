@@ -53,7 +53,10 @@ export class MongoDriver extends BaseDriver {
     await this.connect();
     const adminDb = this.client.db().admin();
     const res = await adminDb.listDatabases();
-    return res.databases.map((db: any) => db.name).filter((name: string) => !['admin', 'local', 'config'].includes(name));
+    return res.databases
+      .map((db: any) => db.name)
+      .filter((name: string) => !['admin', 'local', 'config'].includes(name))
+      .sort((a: string, b: string) => a.localeCompare(b, undefined, { numeric: true }));
   }
 
   async getTables(databaseName?: string): Promise<TableInfo[]> {
@@ -61,10 +64,12 @@ export class MongoDriver extends BaseDriver {
     const dbName = databaseName || this.config.database || 'test';
     const db = this.client.db(dbName);
     const collections = await db.listCollections().toArray();
-    return collections.map((col: any) => ({
-      name: col.name,
-      type: 'collection',
-    }));
+    return collections
+      .map((col: any) => ({
+        name: col.name,
+        type: 'collection',
+      }))
+      .sort((a: any, b: any) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   }
 
   async getColumns(tableName: string, databaseName?: string): Promise<ColumnInfo[]> {

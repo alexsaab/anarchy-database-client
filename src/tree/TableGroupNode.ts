@@ -41,6 +41,7 @@ export class TableGroupNode extends BaseNode {
     try {
       const driver = await DriverManager.getInstance().getDriver(this.connectionConfig, this.password, this.sshPassword);
       const tables = await driver.getTables(this.connectionConfig.database, this.schemaName);
+      tables.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
       return tables.map((tbl) => new TableNode(tbl, this.connectionConfig, this.password, this.sshPassword, this));
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to fetch tables: ${err.message}`);

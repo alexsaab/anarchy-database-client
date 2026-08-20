@@ -11,25 +11,33 @@ export class PostgresDriver extends BaseDriver {
   }
 
   async connect(): Promise<void> {
-    if (!this.isConnected) {
-      this.client = new pg.Client({
-        host: this.config.host || 'localhost',
-        port: this.config.port || 5432,
-        user: this.config.user || 'postgres',
-        password: this.password || '',
-        database: this.config.database || 'postgres',
-        ssl: this.config.ssl ? { rejectUnauthorized: false } : undefined,
-      });
-      await this.client.connect();
-      this.isConnected = true;
+    if (this.isConnected && this.client) {
+      return;
     }
+    await this.disconnect().catch(() => {});
+    this.client = new pg.Client({
+      host: this.config.host || 'localhost',
+      port: this.config.port || 5432,
+      user: this.config.user || 'postgres',
+      password: this.password || '',
+      database: this.config.database || 'postgres',
+      ssl: this.config.ssl ? { rejectUnauthorized: false } : undefined,
+    });
+    this.client.on('error', () => {
+      this.isConnected = false;
+      this.client = null;
+    });
+    await this.client.connect();
+    this.isConnected = true;
   }
 
   async disconnect(): Promise<void> {
+    this.isConnected = false;
     if (this.client) {
-      await this.client.end();
+      try {
+        await this.client.end();
+      } catch (e) {}
       this.client = null;
-      this.isConnected = false;
     }
   }
 
@@ -46,18 +54,18 @@ export class PostgresDriver extends BaseDriver {
   }
 
   async getDatabases(): Promise<string[]> {
-    const res = await this.executeQuery("SELECT datname FROM pg_database WHERE datistemplate = false AND datname != 'postgres';");
+    const res = await this.executeQuery("SELECT datname FROM pg_database WHERE datistemplate = false AND datname != 'postgres' ORDER BY datname;");
     return ['postgres', ...res.rows.map((r: any) => r.datname)];
   }
 
   async getSchemas(databaseName?: string): Promise<string[]> {
-    const res = await this.executeQuery("SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog', 'information_schema');");
+    const res = await this.executeQuery("SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog', 'information_schema') ORDER BY schema_name;");
     return res.rows.map((r: any) => r.schema_name);
   }
 
   async getTables(databaseName?: string, schemaName: string = 'public'): Promise<TableInfo[]> {
     const res = await this.executeQuery(
-      `SELECT table_name FROM information_schema.tables WHERE table_schema = '${schemaName}' AND table_type = 'BASE TABLE';`
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = '${schemaName}' AND table_type = 'BASE TABLE' ORDER BY table_name;`
     );
     return res.rows.map((r: any) => ({
       name: r.table_name,
@@ -68,7 +76,7 @@ export class PostgresDriver extends BaseDriver {
 
   async getViews(databaseName?: string, schemaName: string = 'public'): Promise<TableInfo[]> {
     const res = await this.executeQuery(
-      `SELECT table_name FROM information_schema.views WHERE table_schema = '${schemaName}';`
+      `SELECT table_name FROM information_schema.views WHERE table_schema = '${schemaName}' ORDER BY table_name;`
     );
     return res.rows.map((r: any) => ({
       name: r.table_name,
@@ -79,7 +87,7 @@ export class PostgresDriver extends BaseDriver {
 
   async getFunctions(databaseName?: string, schemaName: string = 'public'): Promise<RoutineInfo[]> {
     const res = await this.executeQuery(
-      `SELECT routine_name FROM information_schema.routines WHERE routine_schema = '${schemaName}' AND routine_type = 'FUNCTION';`
+      `SELECT routine_name FROM information_schema.routines WHERE routine_schema = '${schemaName}' AND routine_type = 'FUNCTION' ORDER BY routine_name;`
     );
     return res.rows.map((r: any) => ({
       name: r.routine_name,
@@ -89,7 +97,7 @@ export class PostgresDriver extends BaseDriver {
 
   async getProcedures(databaseName?: string, schemaName: string = 'public'): Promise<RoutineInfo[]> {
     const res = await this.executeQuery(
-      `SELECT routine_name FROM information_schema.routines WHERE routine_schema = '${schemaName}' AND routine_type = 'PROCEDURE';`
+      `SELECT routine_name FROM information_schema.routines WHERE routine_schema = '${schemaName}' AND routine_type = 'PROCEDURE' ORDER BY routine_name;`
     );
     return res.rows.map((r: any) => ({
       name: r.routine_name,
@@ -99,7 +107,7 @@ export class PostgresDriver extends BaseDriver {
 
   async getTriggers(databaseName?: string, schemaName: string = 'public'): Promise<TriggerInfo[]> {
     const res = await this.executeQuery(
-      `SELECT trigger_name, event_object_table, action_timing, event_manipulation FROM information_schema.triggers WHERE trigger_schema = '${schemaName}';`
+      `SELECT trigger_name, event_object_table, action_timing, event_manipulation FROM information_schema.triggers WHERE trigger_schema = '${schemaName}' ORDER BY trigger_name;`
     );
     return res.rows.map((r: any) => ({
       name: r.trigger_name,
@@ -164,23 +172,46 @@ export class PostgresDriver extends BaseDriver {
   }
 
   async executeQuery(sql: string): Promise<QueryResult> {
-    await this.connect();
-    const startTime = Date.now();
-    const result = await this.client!.query(sql);
-    const costTimeMs = Date.now() - startTime;
+    const runQuery = async () => {
+      await this.connect();
+      const startTime = Date.now();
+      const result = await this.client!.query(sql);
+      const costTimeMs = Date.now() - startTime;
 
-    const columnFields: ColumnInfo[] = (result.fields || []).map((f: any) => ({
-      name: f.name,
-      type: String(f.dataTypeID),
-      nullable: true,
-    }));
+      const columnFields: ColumnInfo[] = (result.fields || []).map((f: any) => ({
+        name: f.name,
+        type: String(f.dataTypeID),
+        nullable: true,
+      }));
 
-    return {
-      rows: result.rows || [],
-      fields: columnFields,
-      affectedRows: result.rowCount || 0,
-      costTimeMs,
+      return {
+        rows: result.rows || [],
+        fields: columnFields,
+        affectedRows: result.rowCount || 0,
+        costTimeMs,
+      };
     };
+
+    try {
+      return await runQuery();
+    } catch (err: any) {
+      const errMsg = String(err?.message || '');
+      if (
+        errMsg.includes('not queryable') ||
+        errMsg.includes('Connection terminated') ||
+        errMsg.includes('connection error') ||
+        errMsg.includes('closed') ||
+        errMsg.includes('ECONNRESET') ||
+        errMsg.includes('ETIMEDOUT') ||
+        errMsg.includes('57P01') ||
+        errMsg.includes('57P02') ||
+        errMsg.includes('57P03')
+      ) {
+        await this.disconnect().catch(() => {});
+        return await runQuery();
+      }
+      throw err;
+    }
   }
 
   async getTableData(tableName: string, params: PageParams, schemaName: string = 'public'): Promise<QueryResult> {
@@ -193,6 +224,11 @@ export class PostgresDriver extends BaseDriver {
     if (params.filterSql) {
       sql += ` WHERE ${params.filterSql}`;
       countSql += ` WHERE ${params.filterSql}`;
+    }
+
+    if (params.sortField) {
+      const order = params.sortOrder === 'DESC' ? 'DESC' : 'ASC';
+      sql += ` ORDER BY "${params.sortField}" ${order}`;
     }
 
     sql += ` LIMIT ${params.pageSize} OFFSET ${offset};`;

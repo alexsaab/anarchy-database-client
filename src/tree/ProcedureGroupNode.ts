@@ -31,6 +31,7 @@ export class ProcedureGroupNode extends BaseNode {
     try {
       const driver = await DriverManager.getInstance().getDriver(this.connectionConfig, this.password, this.sshPassword);
       const procs = await driver.getProcedures(this.connectionConfig.database, this.schemaName);
+      procs.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
       return procs.map((p) => new ScriptNode(p.name, 'procedure', this.connectionConfig, this.password, this.sshPassword, this.schemaName, this));
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to fetch procedures: ${err.message}`);

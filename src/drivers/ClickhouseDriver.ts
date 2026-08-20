@@ -80,7 +80,7 @@ export class ClickhouseDriver extends BaseDriver {
   async getDatabases(): Promise<string[]> {
     const res = await this.httpQuery('SHOW DATABASES FORMAT JSON;');
     if (res && res.data) {
-      return res.data.map((r: any) => r.name);
+      return res.data.map((r: any) => r.name).sort((a: string, b: string) => a.localeCompare(b, undefined, { numeric: true }));
     }
     return ['default'];
   }
@@ -89,10 +89,12 @@ export class ClickhouseDriver extends BaseDriver {
     const db = databaseName || this.config.database || 'default';
     const res = await this.httpQuery(`SHOW TABLES FROM \`${db}\` FORMAT JSON;`);
     if (res && res.data) {
-      return res.data.map((r: any) => ({
-        name: r.name,
-        type: 'table',
-      }));
+      return res.data
+        .map((r: any) => ({
+          name: r.name,
+          type: 'table',
+        }))
+        .sort((a: any, b: any) => a.name.localeCompare(b.name, undefined, { numeric: true }));
     }
     return [];
   }
@@ -163,6 +165,11 @@ export class ClickhouseDriver extends BaseDriver {
 
     if (params.filterSql) {
       sql += ` WHERE ${params.filterSql}`;
+    }
+
+    if (params.sortField) {
+      const order = params.sortOrder === 'DESC' ? 'DESC' : 'ASC';
+      sql += ` ORDER BY \`${params.sortField}\` ${order}`;
     }
 
     sql += ` LIMIT ${params.pageSize} OFFSET ${offset} FORMAT JSON;`;
