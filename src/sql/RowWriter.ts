@@ -15,10 +15,16 @@ export function quoteId(dbType: string, name: string): string {
     // Backticks are escaped by doubling; an identifier can never contain a NUL.
     return `\`${String(name).replace(/`/g, '``')}\``;
   }
+  if (dbType === 'SQLServer') {
+    return `[${String(name).replace(/]/g, ']]')}]`;
+  }
   return `"${String(name).replace(/"/g, '""')}"`;
 }
 
 export function formatTableRef(dbType: string, tableName: string, schemaName?: string, databaseName?: string): string {
+  if (dbType === 'SQLServer') {
+    return `${quoteId(dbType, schemaName || 'dbo')}.${quoteId(dbType, tableName)}`;
+  }
   if (dbType === 'MySQL') {
     return databaseName
       ? `${quoteId(dbType, databaseName)}.${quoteId(dbType, tableName)}`

@@ -1,6 +1,7 @@
 export type DatabaseType =
   | 'PostgreSQL'
   | 'MySQL'
+  | 'SQLServer'
   | 'SQLite'
   | 'Redis'
   | 'MongoDB'

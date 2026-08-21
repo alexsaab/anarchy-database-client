@@ -145,6 +145,67 @@ export class ElasticsearchDriver extends BaseDriver {
     return false;
   }
 
+  /** Documents are editable through the Elasticsearch API instead. */
+  public get supportsRowWrites(): boolean {
+    return true;
+  }
+
+  private static documentId(rowKey: Record<string, any>): string {
+    const id = rowKey._id ?? rowKey.id;
+    if (id === undefined || id === null || id === '') {
+      throw new Error('This document has no _id, so it cannot be edited.');
+    }
+    return String(id);
+  }
+
+  public async updateRowNative(
+    indexName: string,
+    rowKey: Record<string, any>,
+    columnName: string,
+    value: any
+  ): Promise<number> {
+    if (columnName === '_id' || columnName === '_index' || columnName === '_score') {
+      throw new Error(`"${columnName}" is Elasticsearch metadata and cannot be edited.`);
+    }
+    if (!this.client) {
+      await this.connect();
+    }
+    await this.client.update({
+      index: indexName,
+      id: ElasticsearchDriver.documentId(rowKey),
+      doc: { [columnName]: value },
+      refresh: true,
+    });
+    return 1;
+  }
+
+  public async deleteRowNative(indexName: string, rowKey: Record<string, any>): Promise<number> {
+    if (!this.client) {
+      await this.connect();
+    }
+    await this.client.delete({
+      index: indexName,
+      id: ElasticsearchDriver.documentId(rowKey),
+      refresh: true,
+    });
+    return 1;
+  }
+
+  public async insertRowNative(indexName: string, rowData: Record<string, any>): Promise<number> {
+    if (!this.client) {
+      await this.connect();
+    }
+    // Metadata fields are not part of the document body.
+    const { _id, _index, _score, ...doc } = rowData as any;
+    await this.client.index({
+      index: indexName,
+      ...(_id ? { id: String(_id) } : {}),
+      document: doc,
+      refresh: true,
+    });
+    return 1;
+  }
+
   async getDatabases(): Promise<string[]> {
     return ['cluster'];
   }

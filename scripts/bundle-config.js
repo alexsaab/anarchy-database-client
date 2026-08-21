@@ -18,5 +18,6 @@ module.exports = {
     'mongodb',
     '@clickhouse/client',
     'ssh2',
+    'mssql',
   ],
 };

@@ -254,6 +254,7 @@ export class ConnectWebviewProvider {
     <select id="type" onchange="onTypeChange()">
       <option value="PostgreSQL">PostgreSQL</option>
       <option value="MySQL">MySQL / MariaDB</option>
+      <option value="SQLServer">SQL Server</option>
       <option value="SQLite">SQLite</option>
       <option value="Redis">Redis</option>
       <option value="MongoDB">MongoDB</option>
@@ -402,6 +403,7 @@ export class ConnectWebviewProvider {
         if (!initial) {
           if (type === 'PostgreSQL') portInput.value = 5432;
           if (type === 'MySQL') portInput.value = 3306;
+          if (type === 'SQLServer') portInput.value = 1433;
           if (type === 'Redis') portInput.value = 6379;
           if (type === 'MongoDB') portInput.value = 27017;
           if (type === 'Elasticsearch') portInput.value = 9200;

@@ -153,11 +153,49 @@ export abstract class BaseDriver {
 
   /**
    * True when the grid may generate SQL INSERT/UPDATE/DELETE for this store.
-   * Document stores and key-value stores must override this: generating SQL for
-   * them produces statements the server cannot parse.
+   * Document stores and key-value stores override this: generating SQL for them
+   * produces statements the server cannot parse. Such a driver can still accept
+   * edits by overriding the row-write methods below with its native API.
    */
   public get supportsSqlWrites(): boolean {
     return true;
+  }
+
+  /** True when the grid may offer editing at all, by whatever mechanism. */
+  public get supportsRowWrites(): boolean {
+    return this.supportsSqlWrites;
+  }
+
+  /**
+   * Native row writes for stores that are not SQL. SQL drivers leave these
+   * alone; the grid builds bound statements for them instead.
+   *
+   * Each returns the number of rows affected.
+   */
+  public async updateRowNative(
+    tableName: string,
+    rowKey: Record<string, any>,
+    columnName: string,
+    value: any,
+    schemaName?: string
+  ): Promise<number> {
+    throw new Error(`${this.config.type} does not support row updates.`);
+  }
+
+  public async deleteRowNative(
+    tableName: string,
+    rowKey: Record<string, any>,
+    schemaName?: string
+  ): Promise<number> {
+    throw new Error(`${this.config.type} does not support row deletion.`);
+  }
+
+  public async insertRowNative(
+    tableName: string,
+    rowData: Record<string, any>,
+    schemaName?: string
+  ): Promise<number> {
+    throw new Error(`${this.config.type} does not support row insertion.`);
   }
 
   /**

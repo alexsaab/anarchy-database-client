@@ -45,4 +45,9 @@ export interface PageParams {
    * pages other than the current one are still found.
    */
   searchTerm?: string;
+  /**
+   * Keyset cursor: the key values of the row at the edge of the previous page.
+   * Present only for Next/Prev, where it replaces a deep OFFSET.
+   */
+  cursor?: { values: Record<string, any>; direction: 'next' | 'prev' };
 }

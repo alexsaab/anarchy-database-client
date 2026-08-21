@@ -54,6 +54,63 @@ export class MongoDriver extends BaseDriver {
     return false;
   }
 
+  /** Documents are editable through the MongoDB driver instead. */
+  public get supportsRowWrites(): boolean {
+    return true;
+  }
+
+  private collectionFor(tableName: string): any {
+    return this.client.db(this.config.database || 'test').collection(tableName);
+  }
+
+  /** _id may be an ObjectId; the grid only ever sees its string form. */
+  private static idFilter(rowKey: Record<string, any>): any {
+    const raw = rowKey._id;
+    if (raw === undefined || raw === null || raw === '') {
+      throw new Error('This document has no _id, so it cannot be edited.');
+    }
+    const text = String(raw);
+    if (/^[0-9a-fA-F]{24}$/.test(text)) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { ObjectId } = require('mongodb');
+        return { _id: new ObjectId(text) };
+      } catch (e) {
+        // fall through to the literal value
+      }
+    }
+    return { _id: raw };
+  }
+
+  public async updateRowNative(
+    tableName: string,
+    rowKey: Record<string, any>,
+    columnName: string,
+    value: any
+  ): Promise<number> {
+    if (columnName === '_id') {
+      throw new Error('_id is immutable in MongoDB and cannot be edited.');
+    }
+    await this.connect();
+    const res = await this.collectionFor(tableName).updateOne(MongoDriver.idFilter(rowKey), {
+      $set: { [columnName]: value },
+    });
+    return res.modifiedCount ?? res.matchedCount ?? 0;
+  }
+
+  public async deleteRowNative(tableName: string, rowKey: Record<string, any>): Promise<number> {
+    await this.connect();
+    const res = await this.collectionFor(tableName).deleteOne(MongoDriver.idFilter(rowKey));
+    return res.deletedCount ?? 0;
+  }
+
+  public async insertRowNative(tableName: string, rowData: Record<string, any>): Promise<number> {
+    await this.connect();
+    const { _id, ...doc } = rowData as any;
+    await this.collectionFor(tableName).insertOne(doc);
+    return 1;
+  }
+
   async getDatabases(): Promise<string[]> {
     await this.connect();
     const adminDb = this.client.db().admin();

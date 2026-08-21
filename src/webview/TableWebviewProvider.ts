@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { DriverManager } from '../drivers/DriverManager.js';
 import { BaseDriver } from '../drivers/BaseDriver.js';
 import { RowWriter, formatTableRef, quoteId, runBound } from '../sql/RowWriter.js';
+import { cursorFrom, keyColumnsFor } from '../sql/Keyset.js';
 import { ConnectionState } from '../drivers/ConnectionState.js';
 import { TableNode } from '../tree/TableNode.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
@@ -161,12 +162,32 @@ export class TableWebviewProvider {
           break;
         case 'fetchData':
           if (msg.params) {
-            currentParams = { ...currentParams, ...msg.params };
+            const { cursor, ...rest } = msg.params;
+            currentParams = { ...currentParams, ...rest, cursor: undefined };
+
             const size = Number(currentParams.pageSize);
             if (!TableWebviewProvider.PAGE_SIZES.includes(size)) {
               currentParams.pageSize = TableWebviewProvider.lastPageSize;
             } else {
               TableWebviewProvider.lastPageSize = size;
+            }
+
+            // Turn the boundary row into a key cursor, but only when the table
+            // has a total order; otherwise paging falls back to OFFSET.
+            if (cursor && cursor.row) {
+              try {
+                const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
+                const columns = await driver.getColumns(tableName, connectionConfig.database, schemaName);
+                const keys = keyColumnsFor(columns, currentParams.sortField, currentParams.sortOrder);
+                if (keys) {
+                  currentParams.cursor = {
+                    values: cursorFrom(cursor.row, keys),
+                    direction: cursor.direction === 'prev' ? 'prev' : 'next',
+                  };
+                }
+              } catch (e) {
+                // A cursor is an optimisation; OFFSET still works without it.
+              }
             }
           }
           await loadData();
@@ -177,7 +198,7 @@ export class TableWebviewProvider {
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
 
-            if (!driver.supportsSqlWrites) {
+            if (!driver.supportsRowWrites) {
               vscode.window.showWarningMessage(
                 t(
                   `Editing rows is not supported for ${dbType}; this view is read-only.`,
@@ -187,12 +208,16 @@ export class TableWebviewProvider {
               break;
             }
 
+            // SQL stores get bound statements; document stores use their own API.
+            const nativeWrites = !driver.supportsSqlWrites;
             const writer = new RowWriter(driver, dbType, tableRef);
 
             if (msg.type === 'insertRow') {
-              const res = await runBound(driver, writer.insert(msg.rowData || {}));
+              const affectedRows = nativeWrites
+                ? await driver.insertRowNative(tableName, msg.rowData || {}, schemaName)
+                : (await runBound(driver, writer.insert(msg.rowData || {}))).affectedRows ?? 1;
               vscode.window.showInformationMessage(
-                t(`Inserted ${res.affectedRows ?? 1} row.`, `Добавлено строк: ${res.affectedRows ?? 1}.`)
+                t(`Inserted ${affectedRows} row.`, `Добавлено строк: ${affectedRows}.`)
               );
               await loadData();
               break;
@@ -213,13 +238,25 @@ export class TableWebviewProvider {
               break;
             }
 
-            const statement =
-              msg.type === 'updateCell'
-                ? writer.update(msg.columnName, msg.isNull ? null : msg.newValue, rowKey)
-                : writer.delete(rowKey);
-
-            const res = await runBound(driver, statement);
-            const affected = res.affectedRows ?? 0;
+            let affected: number;
+            if (nativeWrites) {
+              affected =
+                msg.type === 'updateCell'
+                  ? await driver.updateRowNative(
+                      tableName,
+                      rowKey,
+                      msg.columnName,
+                      msg.isNull ? null : msg.newValue,
+                      schemaName
+                    )
+                  : await driver.deleteRowNative(tableName, rowKey, schemaName);
+            } else {
+              const statement =
+                msg.type === 'updateCell'
+                  ? writer.update(msg.columnName, msg.isNull ? null : msg.newValue, rowKey)
+                  : writer.delete(rowKey);
+              affected = (await runBound(driver, statement)).affectedRows ?? 0;
+            }
 
             if (affected === 0) {
               vscode.window.showWarningMessage(
@@ -764,9 +801,11 @@ export class TableWebviewProvider {
           type: 'fetchData',
           params: {
             page: currentPage,
+            pageSize,
             searchTerm: currentSearch || undefined,
             sortField: currentSortField || undefined,
             sortOrder: currentSortOrder || undefined,
+            cursor: allRows.length > 0 ? { row: allRows[0], direction: 'prev' } : undefined,
           }
         });
       }
@@ -793,9 +832,14 @@ export class TableWebviewProvider {
           type: 'fetchData',
           params: {
             page: currentPage,
+            pageSize,
             searchTerm: currentSearch || undefined,
             sortField: currentSortField || undefined,
             sortOrder: currentSortOrder || undefined,
+            // Stepping forward uses the last row as a cursor, so the server
+            // never has to count past a deep OFFSET. The extension ignores it
+            // when the table has no usable key.
+            cursor: allRows.length > 0 ? { row: allRows[allRows.length - 1], direction: 'next' } : undefined,
           }
         });
       }

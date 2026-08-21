@@ -31,6 +31,9 @@ export function buildSearchClause(dbType: string, columns: ColumnInfo[], term: s
     if (dbType === 'PostgreSQL') {
       // Cast so numeric, date and json columns are searchable as text too.
       parts.push(`CAST(${id} AS TEXT) ILIKE ? ESCAPE '\\'`);
+    } else if (dbType === 'SQLServer' || dbType === 'MSSQL') {
+      // SQL Server collations are case-insensitive by default; LIKE handles it.
+      parts.push(`CAST(${id} AS NVARCHAR(MAX)) LIKE ? ESCAPE '\\'`);
     } else if (dbType === 'MySQL') {
       // MySQL string comparison is case-insensitive under the usual collations.
       parts.push(`CAST(${id} AS CHAR) LIKE ? ESCAPE '\\\\'`);

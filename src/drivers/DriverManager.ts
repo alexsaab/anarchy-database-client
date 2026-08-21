@@ -1,6 +1,7 @@
 import { BaseDriver } from './BaseDriver.js';
 import { PostgresDriver } from './PostgresDriver.js';
 import { MysqlDriver } from './MysqlDriver.js';
+import { MssqlDriver } from './MssqlDriver.js';
 import { SqliteDriver } from './SqliteDriver.js';
 import { RedisDriver } from './RedisDriver.js';
 import { MongoDriver } from './MongoDriver.js';
@@ -60,6 +61,9 @@ export class DriverManager {
           break;
         case 'MySQL':
           driver = new MysqlDriver(finalConfig, password);
+          break;
+        case 'SQLServer':
+          driver = new MssqlDriver(finalConfig, password);
           break;
         case 'SQLite':
           driver = new SqliteDriver(finalConfig, password);

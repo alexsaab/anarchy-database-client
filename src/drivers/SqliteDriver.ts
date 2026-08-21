@@ -2,7 +2,7 @@ import fs from 'fs';
 import { BaseDriver, ForeignKeyInfo } from './BaseDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
-import { sqliteSearchClause } from '../sql/SearchClause.js';
+import { buildPagedQuery, finishPage, renumber } from '../sql/PagedQuery.js';
 
 export class SqliteDriver extends BaseDriver {
   private db: any = null;
@@ -196,43 +196,19 @@ export class SqliteDriver extends BaseDriver {
   }
 
   async getTableData(tableName: string, params: PageParams, schemaName?: string): Promise<QueryResult> {
-    const offset = (params.page - 1) * params.pageSize;
     const tableRef = `"${tableName}"`;
+    const columns = await this.getColumns(tableName);
+    const query = buildPagedQuery({ dbType: 'SQLite', tableRef, params, columns });
 
-    const conditions: string[] = [];
-    const searchParams: any[] = [];
-
-    if (params.filterSql) {
-      conditions.push(`(${params.filterSql})`);
-    }
-
-    if (params.searchTerm) {
-      const clause = sqliteSearchClause(await this.getColumns(tableName), params.searchTerm);
-      if (clause.sql) {
-        conditions.push(clause.sql);
-        searchParams.push(...clause.params);
-      }
-    }
-
-    const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
-
-    const countSql = `SELECT COUNT(*) as total FROM ${tableRef}${where}`;
-    const countRes = searchParams.length
-      ? await this.executeParameterized(countSql, searchParams)
-      : await this.executeQuery(countSql);
+    const countRes = query.countParams.length
+      ? await this.executeParameterized(query.countSql, query.countParams)
+      : await this.executeQuery(query.countSql);
     const totalCount = parseInt(countRes.rows[0]?.total || '0', 10);
 
-    let sql = `SELECT * FROM ${tableRef}${where}`;
-    if (params.sortField) {
-      const order = params.sortOrder === 'DESC' ? 'DESC' : 'ASC';
-      sql += ` ORDER BY "${params.sortField}" ${order}`;
-    }
-    sql += ` LIMIT ${params.pageSize} OFFSET ${offset};`;
-
-    const queryResult = searchParams.length
-      ? await this.executeParameterized(sql, searchParams)
-      : await this.executeQuery(sql);
-    queryResult.totalCount = totalCount;
-    return queryResult;
+    const result = query.rowsParams.length
+      ? await this.executeParameterized(query.rowsSql, query.rowsParams)
+      : await this.executeQuery(query.rowsSql);
+    result.totalCount = totalCount;
+    return finishPage(result, query.reversed);
   }
 }
