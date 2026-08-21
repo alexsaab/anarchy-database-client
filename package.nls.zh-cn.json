@@ -28,5 +28,7 @@
   "command.explainQuery": "执行计划分析 (EXPLAIN)",
   "command.openRedisEditor": "Redis 键值管理器",
   "command.compareData": "表数据对比与同步",
-  "command.aiAssistant": "AI SQL 智能助手"
+  "command.aiAssistant": "AI SQL 智能助手",
+  "command.generateMermaid": "生成 Mermaid ER 图",
+  "command.runQueryFile": "运行 SQL 脚本"
 }

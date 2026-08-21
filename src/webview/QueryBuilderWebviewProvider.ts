@@ -253,12 +253,13 @@ export class QueryBuilderWebviewProvider {
     function generateSql() {
       const tbl = mainSelect.value;
       const checkedCols = Array.from(document.querySelectorAll('#columnsCheckboxList input:checked')).map(i => i.value);
-      const colStr = checkedCols.length > 0 ? checkedCols.map(c => \`\`\`\${c}\`\`\`).join(', ') : '*';
+      const Q = String.fromCharCode(96);
+      const colStr = checkedCols.length > 0 ? checkedCols.map(c => Q + c + Q).join(', ') : '*';
 
-      let sql = \`SELECT \${colStr}\\nFROM \`\${tbl}\`\`;
+      let sql = 'SELECT ' + colStr + '\\nFROM ' + Q + tbl + Q;
 
       joins.forEach(j => {
-        sql += \`\\n\${j.type} \`\${j.table}\` ON \`\${tbl}\`.\`\${j.col1}\` = \`\${j.table}\`.\`\${j.col2}\`\`;
+        sql += '\\n' + j.type + ' ' + Q + j.table + Q + ' ON ' + Q + tbl + Q + '.' + Q + j.col1 + Q + ' = ' + Q + j.table + Q + '.' + Q + j.col2 + Q;
       });
 
       if (wheres.length > 0) {

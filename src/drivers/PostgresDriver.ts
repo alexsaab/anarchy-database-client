@@ -14,26 +14,61 @@ export class PostgresDriver extends BaseDriver {
     if (this.isConnected && this.client) {
       return;
     }
-    await this.disconnect().catch(() => {});
-    this.client = new pg.Client({
-      host: this.config.host || 'localhost',
-      port: this.config.port || 5432,
-      user: this.config.user || 'postgres',
-      password: this.password || '',
-      database: this.config.database || 'postgres',
-      ssl: this.config.ssl ? { rejectUnauthorized: false } : undefined,
+    await this.connectOnce(async () => {
+      if (this.isConnected && this.client) {
+        return;
+      }
+      await this.disconnect().catch(() => {});
+
+      const client = new pg.Client({
+        host: this.config.host || 'localhost',
+        port: this.config.port || 5432,
+        user: this.config.user || 'postgres',
+        password: this.password || '',
+        database: this.config.database || 'postgres',
+        ssl: this.config.ssl ? { rejectUnauthorized: false } : undefined,
+      });
+
+      client.on('error', (err: any) => {
+        // Only retire the client if it is still the active one: a later
+        // reconnect may already have replaced it.
+        if (this.client === client) {
+          this.isConnected = false;
+          this.client = null;
+          this.markLost(err);
+        }
+      });
+      client.on('end', () => {
+        if (this.client === client) {
+          this.isConnected = false;
+          this.client = null;
+        }
+      });
+
+      await client.connect();
+      this.client = client;
+      this.isConnected = true;
     });
-    this.client.on('error', () => {
-      this.isConnected = false;
-      this.client = null;
-    });
-    await this.client.connect();
-    this.isConnected = true;
+  }
+
+  /**
+   * Returns a live client. Never hand out this.client directly: it can be
+   * nulled by an 'error' event between the await and the call site.
+   */
+  private async acquireClient(): Promise<pg.Client> {
+    await this.connect();
+    const client = this.client;
+    if (!client) {
+      throw Object.assign(new Error('Connection to the database was lost.'), { code: 'CONNECTION_CLOSED' });
+    }
+    return client;
   }
 
   async disconnect(): Promise<void> {
     this.isConnected = false;
     if (this.client) {
+      this.client.removeAllListeners('error');
+      this.client.removeAllListeners('end');
       try {
         await this.client.end();
       } catch (e) {}
@@ -43,8 +78,8 @@ export class PostgresDriver extends BaseDriver {
 
   async testConnection(): Promise<{ success: boolean; message?: string }> {
     try {
-      await this.connect();
-      await this.client!.query('SELECT 1;');
+      const client = await this.acquireClient();
+      await client.query('SELECT 1;');
       return { success: true, message: 'Successfully connected to PostgreSQL database!' };
     } catch (err: any) {
       return { success: false, message: err.message || 'Connection failed' };
@@ -173,9 +208,9 @@ export class PostgresDriver extends BaseDriver {
 
   async executeQuery(sql: string): Promise<QueryResult> {
     const runQuery = async () => {
-      await this.connect();
+      const client = await this.acquireClient();
       const startTime = Date.now();
-      const result = await this.client!.query(sql);
+      const result = await client.query(sql);
       const costTimeMs = Date.now() - startTime;
 
       const columnFields: ColumnInfo[] = (result.fields || []).map((f: any) => ({
@@ -192,26 +227,7 @@ export class PostgresDriver extends BaseDriver {
       };
     };
 
-    try {
-      return await runQuery();
-    } catch (err: any) {
-      const errMsg = String(err?.message || '');
-      if (
-        errMsg.includes('not queryable') ||
-        errMsg.includes('Connection terminated') ||
-        errMsg.includes('connection error') ||
-        errMsg.includes('closed') ||
-        errMsg.includes('ECONNRESET') ||
-        errMsg.includes('ETIMEDOUT') ||
-        errMsg.includes('57P01') ||
-        errMsg.includes('57P02') ||
-        errMsg.includes('57P03')
-      ) {
-        await this.disconnect().catch(() => {});
-        return await runQuery();
-      }
-      throw err;
-    }
+    return this.withReconnect(runQuery);
   }
 
   async getTableData(tableName: string, params: PageParams, schemaName: string = 'public'): Promise<QueryResult> {

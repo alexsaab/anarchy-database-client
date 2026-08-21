@@ -3,6 +3,7 @@ import https from 'https';
 import { BaseDriver, ForeignKeyInfo } from './BaseDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
+import { parseHost } from '../util/HostUtil.js';
 
 export class CouchdbDriver extends BaseDriver {
   constructor(config: ConnectionConfig, password?: string) {
@@ -31,13 +32,17 @@ export class CouchdbDriver extends BaseDriver {
 
   private async httpGet(path: string): Promise<any> {
     return new Promise((resolve, reject) => {
-      const host = this.config.host || 'localhost';
-      const port = this.config.port || 5984;
+      const endpoint = parseHost(this.config.host, {
+        defaultPort: 5984,
+        configPort: this.config.port,
+        ssl: this.config.ssl,
+      });
+      const host = endpoint.hostname;
+      const port = endpoint.port;
       const user = this.config.user || '';
       const pass = this.password || '';
 
-      const isSsl = !!this.config.ssl;
-      const protocol = isSsl ? https : http;
+      const protocol = endpoint.protocol === 'https' ? https : http;
 
       const headers: Record<string, string> = {
         'Accept': 'application/json',
@@ -51,7 +56,7 @@ export class CouchdbDriver extends BaseDriver {
         {
           hostname: host,
           port: port,
-          path: path,
+          path: endpoint.basePath + path,
           method: 'GET',
           headers,
           timeout: 5000,
@@ -84,13 +89,17 @@ export class CouchdbDriver extends BaseDriver {
 
   private async httpPost(path: string, payload: any): Promise<any> {
     return new Promise((resolve, reject) => {
-      const host = this.config.host || 'localhost';
-      const port = this.config.port || 5984;
+      const endpoint = parseHost(this.config.host, {
+        defaultPort: 5984,
+        configPort: this.config.port,
+        ssl: this.config.ssl,
+      });
+      const host = endpoint.hostname;
+      const port = endpoint.port;
       const user = this.config.user || '';
       const pass = this.password || '';
 
-      const isSsl = !!this.config.ssl;
-      const protocol = isSsl ? https : http;
+      const protocol = endpoint.protocol === 'https' ? https : http;
       const dataStr = JSON.stringify(payload);
 
       const headers: Record<string, string> = {
@@ -107,7 +116,7 @@ export class CouchdbDriver extends BaseDriver {
         {
           hostname: host,
           port: port,
-          path: path,
+          path: endpoint.basePath + path,
           method: 'POST',
           headers,
           timeout: 5000,

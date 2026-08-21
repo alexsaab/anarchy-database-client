@@ -11,6 +11,7 @@ import { CouchbaseDriver } from './CouchbaseDriver.js';
 import { FirestoreDriver } from './FirestoreDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { SshTunnelManager, SshTunnelResult } from '../ssh/SshTunnelManager.js';
+import { ConnectionState } from './ConnectionState.js';
 
 export class DriverManager {
   private static instance: DriverManager;
@@ -32,7 +33,8 @@ export class DriverManager {
     if (driver) {
       try {
         await driver.connect();
-      } catch (e) {
+      } catch (e: any) {
+        ConnectionState.getInstance().markLost(config.id, e?.message);
         await driver.disconnect().catch(() => {});
         this.activeDrivers.delete(driverKey);
         driver = undefined;
@@ -87,11 +89,26 @@ export class DriverManager {
           throw new Error(`Unsupported database type: ${config.type}`);
       }
 
-      await driver.connect();
+      try {
+        await driver.connect();
+      } catch (err: any) {
+        ConnectionState.getInstance().markLost(config.id, err?.message);
+        throw err;
+      }
       this.activeDrivers.set(driverKey, driver);
     }
 
+    ConnectionState.getInstance().markConnected(config.id);
     return driver;
+  }
+
+  /**
+   * Drops every cached driver (and any SSH tunnel) for a connection and opens a
+   * fresh one, so a dead session is never reused.
+   */
+  public async reconnect(config: ConnectionConfig, password?: string, sshPassword?: string): Promise<BaseDriver> {
+    await this.removeDriver(config.id);
+    return this.getDriver(config, password, sshPassword);
   }
 
   public async removeDriver(configId: string): Promise<void> {
@@ -107,6 +124,8 @@ export class DriverManager {
       await SshTunnelManager.closeTunnel(tunnel);
       this.sshTunnels.delete(configId);
     }
+
+    ConnectionState.getInstance().markIdle(configId);
   }
 
   public async disconnectAll(): Promise<void> {

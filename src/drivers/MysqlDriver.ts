@@ -10,15 +10,27 @@ export class MysqlDriver extends BaseDriver {
     super(config, password);
   }
 
-  async connect(): Promise<void> {
+  private isSocketDead(): boolean {
     const connAny = this.connection as any;
-    if (connAny && (connAny._closing || connAny._ended || connAny.stream?.destroyed || connAny.stream?.writable === false)) {
+    return !!connAny && !!(connAny._closing || connAny._ended || connAny.stream?.destroyed || connAny.stream?.writable === false);
+  }
+
+  async connect(): Promise<void> {
+    if (this.isSocketDead()) {
       this.connection = null;
       this.isConnected = false;
     }
 
-    if (!this.isConnected || !this.connection) {
-      this.connection = await mysql.createConnection({
+    if (this.isConnected && this.connection) {
+      return;
+    }
+
+    await this.connectOnce(async () => {
+      if (this.isConnected && this.connection && !this.isSocketDead()) {
+        return;
+      }
+
+      const connection = await mysql.createConnection({
         host: this.config.host || 'localhost',
         port: this.config.port || 3306,
         user: this.config.user || 'root',
@@ -26,36 +38,39 @@ export class MysqlDriver extends BaseDriver {
         database: this.config.database || undefined,
         multipleStatements: true,
       });
-      (this.connection as any).on('error', (err: any) => {
-        if (err?.code === 'PROTOCOL_CONNECTION_LOST' || err?.fatal) {
+
+      (connection as any).on('error', (err: any) => {
+        // Only retire the connection if it is still the active one.
+        if (this.connection === connection) {
           this.connection = null;
           this.isConnected = false;
+          this.markLost(err);
         }
       });
+
+      this.connection = connection;
       this.isConnected = true;
+    });
+  }
+
+  /**
+   * Returns a live connection. Never use this.connection directly after an
+   * await: the 'error' handler can null it in between.
+   */
+  private async acquireConnection(): Promise<mysql.Connection> {
+    await this.connect();
+    const connection = this.connection;
+    if (!connection) {
+      throw Object.assign(new Error('Connection to the database was lost.'), { code: 'PROTOCOL_CONNECTION_LOST' });
     }
+    return connection;
   }
 
   private async queryWithRetry(sql: string, params?: any[]): Promise<any> {
-    await this.connect();
-    try {
-      return await this.connection!.query(sql, params);
-    } catch (err: any) {
-      const msg = String(err?.message || '');
-      if (
-        msg.includes('closed state') ||
-        err?.code === 'PROTOCOL_CONNECTION_LOST' ||
-        err?.code === 'ECONNRESET' ||
-        err?.code === 'PIPE_CLOSED' ||
-        err?.fatal
-      ) {
-        this.connection = null;
-        this.isConnected = false;
-        await this.connect();
-        return await this.connection!.query(sql, params);
-      }
-      throw err;
-    }
+    return this.withReconnect(async () => {
+      const connection = await this.acquireConnection();
+      return await connection.query(sql, params);
+    });
   }
 
   async disconnect(): Promise<void> {
@@ -70,8 +85,8 @@ export class MysqlDriver extends BaseDriver {
 
   async testConnection(): Promise<{ success: boolean; message?: string }> {
     try {
-      await this.connect();
-      await this.connection!.ping();
+      const connection = await this.acquireConnection();
+      await connection.ping();
       return { success: true, message: 'Successfully connected to MySQL database!' };
     } catch (err: any) {
       return { success: false, message: err.message || 'Connection failed' };

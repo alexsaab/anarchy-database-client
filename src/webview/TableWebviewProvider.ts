@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { DriverManager } from '../drivers/DriverManager.js';
+import { ConnectionState } from '../drivers/ConnectionState.js';
 import { TableNode } from '../tree/TableNode.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { PageParams, QueryResult } from '../model/QueryTypes.js';
@@ -8,6 +9,17 @@ import { isRussian, t } from '../util/i18n.js';
 
 export class TableWebviewProvider {
   private static activePanels: Map<string, vscode.WebviewPanel> = new Map();
+
+  /** Rows per page the user last picked, reused when opening further tables. */
+  private static lastPageSize: number = 50;
+  private static readonly PAGE_SIZES = [10, 50, 100, 500, 1000];
+
+  private static escapeHtml(value: string): string {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
 
   private static quoteId(dbType: string, name: string): string {
     if (dbType === 'MySQL') {
@@ -56,12 +68,16 @@ export class TableWebviewProvider {
 
     TableWebviewProvider.activePanels.set(panelKey, panel);
     panel.onDidDispose(() => {
-      TableWebviewProvider.activePanels.delete(panelKey);
+      // Only clear the map entry if it still points at this panel: disposing an
+      // old panel fires after a replacement has already been registered.
+      if (TableWebviewProvider.activePanels.get(panelKey) === panel) {
+        TableWebviewProvider.activePanels.delete(panelKey);
+      }
     });
 
     let currentParams: PageParams = {
       page: 1,
-      pageSize: 50,
+      pageSize: TableWebviewProvider.lastPageSize,
     };
 
     let lastResult: QueryResult | null = null;
@@ -119,10 +135,21 @@ export class TableWebviewProvider {
           params: currentParams,
         });
       } catch (err: any) {
-        vscode.window.showErrorMessage(`Failed to load data for ${tableName}: ${err.message}`);
+        const connectionLost = ConnectionState.isConnectionError(err);
+        if (connectionLost) {
+          // The connection-lost notification is raised centrally by
+          // ConnectionState; the grid just offers the inline retry.
+          ConnectionState.getInstance().markLost(connectionConfig.id, err.message);
+        } else {
+          vscode.window.showErrorMessage(`Failed to load data for ${tableName}: ${err.message}`);
+        }
         panel.webview.postMessage({
           type: 'error',
-          message: err.message,
+          message: connectionLost
+            ? t(`Connection to "${connectionConfig.name}" was lost: ${err.message}`,
+                `Соединение с "${connectionConfig.name}" потеряно: ${err.message}`)
+            : err.message,
+          connectionLost,
         });
       }
     };
@@ -132,9 +159,30 @@ export class TableWebviewProvider {
       const tableRef = TableWebviewProvider.formatTableRef(dbType, tableName, schemaName, connectionConfig.database);
 
       switch (msg.type) {
+        case 'reconnect':
+          try {
+            await DriverManager.getInstance().reconnect(connectionConfig, password, sshPassword);
+            vscode.window.showInformationMessage(
+              t(`Reconnected to ${connectionConfig.name}.`, `Переподключение к ${connectionConfig.name} выполнено.`)
+            );
+            await loadData();
+          } catch (e: any) {
+            panel.webview.postMessage({
+              type: 'error',
+              message: t(`Reconnect failed: ${e.message}`, `Не удалось переподключиться: ${e.message}`),
+              connectionLost: true,
+            });
+          }
+          break;
         case 'fetchData':
           if (msg.params) {
             currentParams = { ...currentParams, ...msg.params };
+            const size = Number(currentParams.pageSize);
+            if (!TableWebviewProvider.PAGE_SIZES.includes(size)) {
+              currentParams.pageSize = TableWebviewProvider.lastPageSize;
+            } else {
+              TableWebviewProvider.lastPageSize = size;
+            }
           }
           await loadData();
           break;
@@ -203,7 +251,12 @@ export class TableWebviewProvider {
     }, 200);
   }
 
-  public static openQueryConsole(connectionConfig: ConnectionConfig, password?: string, sshPassword?: string) {
+  public static openQueryConsole(
+    connectionConfig: ConnectionConfig,
+    password?: string,
+    sshPassword?: string,
+    options?: { initialSql?: string; initialResult?: QueryResult }
+  ) {
     const title = t(`Console: ${connectionConfig.name}`, `Консоль: ${connectionConfig.name}`);
     const panel = vscode.window.createWebviewPanel(
       'dbClientQueryConsole',
@@ -239,11 +292,23 @@ export class TableWebviewProvider {
       }
     });
 
-    panel.webview.html = TableWebviewProvider.getConsoleHtml(connectionConfig.name);
+    panel.webview.html = TableWebviewProvider.getConsoleHtml(connectionConfig.name, options?.initialSql);
+
+    if (options?.initialResult) {
+      lastResult = options.initialResult;
+      // The webview needs a tick to attach its message listener.
+      setTimeout(() => {
+        panel.webview.postMessage({ type: 'queryResult', result: options.initialResult });
+      }, 300);
+    }
   }
 
   private static getHtml(tableName: string): string {
     const ru = isRussian();
+    const initialPageSize = TableWebviewProvider.lastPageSize;
+    const pageSizeOptions = TableWebviewProvider.PAGE_SIZES.map(
+      (n) => `<option value="${n}"${n === initialPageSize ? ' selected' : ''}>${n}</option>`
+    ).join('');
     const text = {
       refresh: ru ? '🔄 Обновить' : '🔄 Refresh',
       addRow: ru ? '➕ Добавить строку' : '➕ Add Row',
@@ -253,11 +318,14 @@ export class TableWebviewProvider {
       page: ru ? 'Стр:' : 'Page:',
       export: ru ? 'Экспорт:' : 'Export:',
       stats: ru ? 'Всего строк' : 'Total rows',
+      rowsPerPage: ru ? 'Строк:' : 'Rows:',
       time: ru ? 'Время выполнения' : 'Query time',
       err: ru ? '❌ Ошибка:' : '❌ Error:',
       save: ru ? 'Сохранить' : 'Save',
       cancel: ru ? 'Отмена' : 'Cancel',
       setNull: ru ? 'Установить NULL' : 'Set as NULL',
+      reconnect: ru ? '🔄 Переподключиться' : '🔄 Reconnect',
+      reconnecting: ru ? 'Переподключение...' : 'Reconnecting...',
     };
 
     return `<!DOCTYPE html>
@@ -370,11 +438,22 @@ export class TableWebviewProvider {
     }
     #errorBox {
       display: none;
+      align-items: center;
+      gap: 12px;
       background: #5a1d1d;
       color: #fca5a5;
       padding: 10px;
       border-radius: 4px;
       margin-bottom: 10px;
+    }
+    #errorBox button {
+      background: #dc2626;
+      color: #fff;
+      white-space: nowrap;
+    }
+    #errorBox button:disabled {
+      opacity: 0.6;
+      cursor: default;
     }
 
     /* Modal Overlay */
@@ -435,6 +514,9 @@ export class TableWebviewProvider {
     <input type="text" id="sqlFilterInput" placeholder="${text.sqlFilterPh}" style="width: 200px;">
     <button id="filterBtn" class="secondary">${text.applyFilter}</button>
 
+    <label>${text.rowsPerPage}</label>
+    <select id="pageSizeSelect" title="${text.rowsPerPage}">${pageSizeOptions}</select>
+
     <label>${text.page}</label>
     <button id="prevBtn">◀</button>
     <span id="pageInfo">1</span>
@@ -444,6 +526,7 @@ export class TableWebviewProvider {
     <button class="secondary" onclick="exportData('csv')">CSV</button>
     <button class="secondary" onclick="exportData('json')">JSON</button>
     <button class="secondary" onclick="exportData('sql')">SQL</button>
+    <button class="secondary" onclick="exportData('xlsx')">Excel</button>
 
     <div class="info" id="stats">Rows: 0 | Time: 0ms</div>
   </div>
@@ -473,7 +556,7 @@ export class TableWebviewProvider {
     const vscode = acquireVsCodeApi();
     let currentPage = 1;
     let totalCount = 0;
-    let pageSize = 50;
+    let pageSize = ${initialPageSize};
     let currentFields = [];
     let allRows = [];
 
@@ -563,7 +646,7 @@ export class TableWebviewProvider {
           '<label>' + f.name + ' (' + f.type + ')</label>' +
           '<div style="display:flex; gap:10px; align-items:center;">' +
             '<input type="text" id="add_col_' + f.name + '" placeholder="Value..." style="flex:1;">' +
-            '<label style="font-weight:normal; font-size:11px;"><input type="checkbox" id="add_null_' + f.name + '" onchange="document.getElementById(\'add_col_' + f.name + '\').disabled = this.checked;"> NULL</label>' +
+            '<label style="font-weight:normal; font-size:11px;"><input type="checkbox" id="add_null_' + f.name + '" onchange="document.getElementById(\\'add_col_' + f.name + '\\').disabled = this.checked;"> NULL</label>' +
           '</div>' +
         '</div>'
       ).join('');
@@ -597,6 +680,20 @@ export class TableWebviewProvider {
       }
     };
 
+    document.getElementById('pageSizeSelect').onchange = (e) => {
+      pageSize = parseInt(e.target.value, 10);
+      currentPage = 1;
+      vscode.postMessage({
+        type: 'fetchData',
+        params: {
+          page: 1,
+          pageSize,
+          sortField: currentSortField || undefined,
+          sortOrder: currentSortOrder || undefined,
+        }
+      });
+    };
+
     document.getElementById('nextBtn').onclick = () => {
       if (currentPage * pageSize < totalCount) {
         currentPage++;
@@ -618,7 +715,7 @@ export class TableWebviewProvider {
           '<label>Value for "' + colName + '":</label>' +
           '<textarea id="cellValInput" style="width:100%; height:90px;" ' + (isNull ? 'disabled' : '') + '>' + (isNull ? '' : currentVal) + '</textarea>' +
           '<div style="margin-top:8px;">' +
-            '<label style="font-size:12px; font-weight:normal;"><input type="checkbox" id="cellSetNullCheckbox" ' + (isNull ? 'checked' : '') + ' onchange="document.getElementById(\'cellValInput\').disabled = this.checked;"> ${text.setNull}</label>' +
+            '<label style="font-size:12px; font-weight:normal;"><input type="checkbox" id="cellSetNullCheckbox" ' + (isNull ? 'checked' : '') + ' onchange="document.getElementById(\\'cellValInput\\').disabled = this.checked;"> ${text.setNull}</label>' +
           '</div>' +
         '</div>';
 
@@ -685,8 +782,23 @@ export class TableWebviewProvider {
       const errorBox = document.getElementById('errorBox');
 
       if (msg.type === 'error') {
-        errorBox.style.display = 'block';
-        errorBox.innerText = '${text.err} ' + msg.message;
+        errorBox.style.display = 'flex';
+        errorBox.textContent = '';
+
+        const label = document.createElement('span');
+        label.textContent = '${text.err} ' + msg.message;
+        errorBox.appendChild(label);
+
+        if (msg.connectionLost) {
+          const btn = document.createElement('button');
+          btn.textContent = '${text.reconnect}';
+          btn.onclick = () => {
+            btn.disabled = true;
+            label.textContent = '${text.reconnecting}';
+            vscode.postMessage({ type: 'reconnect' });
+          };
+          errorBox.appendChild(btn);
+        }
         return;
       }
 
@@ -695,6 +807,10 @@ export class TableWebviewProvider {
         const res = msg.result;
         totalCount = res.totalCount || 0;
         currentPage = msg.params.page;
+        if (msg.params.pageSize) {
+          pageSize = msg.params.pageSize;
+          document.getElementById('pageSizeSelect').value = String(pageSize);
+        }
         currentFields = res.fields;
         allRows = res.rows || [];
 
@@ -737,13 +853,13 @@ export class TableWebviewProvider {
     });
 
     // Automatically trigger initial load when webview is ready
-    vscode.postMessage({ type: 'fetchData', params: { page: 1 } });
+    vscode.postMessage({ type: 'fetchData', params: { page: 1, pageSize } });
   </script>
 </body>
 </html>`;
   }
 
-  private static getConsoleHtml(connectionName: string): string {
+  private static getConsoleHtml(connectionName: string, initialSql?: string): string {
     const ru = isRussian();
     const text = {
       title: ru ? '⚡ SQL Консоль Запросов' : '⚡ SQL Query Console',
@@ -838,7 +954,7 @@ export class TableWebviewProvider {
 </head>
 <body>
   <h3>${text.title} [${connectionName}]</h3>
-  <textarea id="sqlInput" placeholder="${text.ph}">SELECT 1;</textarea>
+  <textarea id="sqlInput" placeholder="${text.ph}">${TableWebviewProvider.escapeHtml(initialSql || 'SELECT 1;')}</textarea>
   <div class="actions">
     <button id="runBtn">${text.run}</button>
 
@@ -848,6 +964,7 @@ export class TableWebviewProvider {
     <button class="secondary" onclick="exportData('csv')">CSV</button>
     <button class="secondary" onclick="exportData('json')">JSON</button>
     <button class="secondary" onclick="exportData('sql')">SQL</button>
+    <button class="secondary" onclick="exportData('xlsx')">Excel</button>
 
     <span id="costTime" style="margin-left:auto; font-size:12px;"></span>
   </div>

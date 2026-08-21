@@ -1,0 +1,14 @@
+# Sources and build tooling: the extension runs from the bundle in out/.
+src/**
+esbuild.js
+tsconfig.json
+**/*.ts
+**/*.map
+
+# Working files that must never ship inside the package.
+transcript_full.jsonl
+CHAT_HISTORY.md
+*.vsix
+.git/**
+.gitignore
+.vscode/**

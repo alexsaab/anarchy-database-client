@@ -7,6 +7,7 @@ import { FunctionGroupNode } from './FunctionGroupNode.js';
 import { ProcedureGroupNode } from './ProcedureGroupNode.js';
 import { TriggerGroupNode } from './TriggerGroupNode.js';
 import { SchemaNode } from './SchemaNode.js';
+import { AliasGroupNode } from './AliasGroupNode.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { DriverManager } from '../drivers/DriverManager.js';
 import { IconHelper } from '../util/IconHelper.js';
@@ -65,7 +66,7 @@ export class DatabaseNode extends BaseNode {
       return [
         queryGroup,
         new TableGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
-        new ViewGroupNode(this.connectionConfig, this.password, this.sshPassword, schema, this),
+        new AliasGroupNode(this.connectionConfig, this.password, this.sshPassword, this),
       ];
     }
 

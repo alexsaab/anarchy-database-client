@@ -20,6 +20,7 @@ import { ProcessListWebviewProvider } from './webview/ProcessListWebviewProvider
 import { DatabaseDumpService } from './dump/DatabaseDumpService.js';
 import { MockDataGenerator } from './mock/MockDataGenerator.js';
 import { DriverManager } from './drivers/DriverManager.js';
+import { ConnectionState } from './drivers/ConnectionState.js';
 import { ScriptNode } from './tree/ScriptNode.js';
 import { SchemaDiffWebviewProvider } from './webview/SchemaDiffWebviewProvider.js';
 import { QueryBuilderWebviewProvider } from './webview/QueryBuilderWebviewProvider.js';
@@ -28,6 +29,9 @@ import { RedisWebviewProvider } from './webview/RedisWebviewProvider.js';
 import { DataSyncWebviewProvider } from './webview/DataSyncWebviewProvider.js';
 import { AiSqlAssistantWebviewProvider } from './webview/AiSqlAssistantWebviewProvider.js';
 import { StatusBarHealthMonitor } from './status/StatusBarHealthMonitor.js';
+import { MermaidService } from './diagram/MermaidService.js';
+import { SqlScriptRunner } from './script/SqlScriptRunner.js';
+import { SchemaNode } from './tree/SchemaNode.js';
 import { IconHelper } from './util/IconHelper.js';
 import { t } from './util/i18n.js';
 
@@ -84,11 +88,65 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  const reconnectById = async (connectionId: string): Promise<boolean> => {
+    const config = storageService.getConnections().find((c) => c.id === connectionId);
+    if (!config) {
+      return false;
+    }
+    const pass = await storageService.getPassword(config.id);
+    const sshPass = await storageService.getSshPassword(config.id);
+    const node = new ConnectionNode(config, context, pass, sshPass);
+    const ok = await node.reconnect();
+    treeProvider.refresh();
+    return ok;
+  };
+
   context.subscriptions.push(
-    vscode.commands.registerCommand('dbClient.reconnectConnection', async (node: ConnectionNode) => {
-      if (node && node instanceof ConnectionNode) {
-        await node.reconnect();
+    vscode.commands.registerCommand('dbClient.reconnectConnection', async (target: ConnectionNode | string) => {
+      // Invoked from the tree context menu (node), or from the "Reconnect" link
+      // in the tooltip / notification / data grid (connection id).
+      if (typeof target === 'string') {
+        return reconnectById(target);
+      }
+      if (target && target instanceof ConnectionNode) {
+        const ok = await target.reconnect();
         treeProvider.refresh();
+        return ok;
+      }
+      return false;
+    })
+  );
+
+  // Keep the tree indicator in step with real connection health, and offer a
+  // one-click retry the moment a connection drops.
+  let lostNoticeShownFor: string | null = null;
+  context.subscriptions.push(
+    ConnectionState.getInstance().onDidChange(async (change) => {
+      treeProvider.refresh();
+
+      if (change.info.status !== 'lost') {
+        if (change.connectionId === lostNoticeShownFor) {
+          lostNoticeShownFor = null;
+        }
+        return;
+      }
+
+      // One notification per outage, not one per failed query.
+      if (lostNoticeShownFor === change.connectionId) {
+        return;
+      }
+      lostNoticeShownFor = change.connectionId;
+
+      const config = storageService.getConnections().find((c) => c.id === change.connectionId);
+      const name = config ? config.name : change.connectionId;
+      const reconnectLabel = t('Reconnect', 'Переподключиться');
+      const choice = await vscode.window.showWarningMessage(
+        t(`Connection to "${name}" was lost: ${change.info.errorMessage || 'the database closed the connection'}`,
+          `Соединение с "${name}" потеряно: ${change.info.errorMessage || 'база данных закрыла соединение'}`),
+        reconnectLabel
+      );
+      if (choice === reconnectLabel) {
+        await reconnectById(change.connectionId);
       }
     })
   );
@@ -281,6 +339,37 @@ export function activate(context: vscode.ExtensionContext) {
         const sshPass = (node as ConnectionNode).sshPassword;
         await ErdWebviewProvider.show(config, pass, sshPass);
       }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.generateMermaid', async (node?: ConnectionNode | DatabaseNode | SchemaNode) => {
+      if (!node) {
+        return;
+      }
+      const config = (node as DatabaseNode).connectionConfig || (node as ConnectionNode).config;
+      const pass = (node as any).password;
+      const sshPass = (node as any).sshPassword;
+      const schemaName = (node as SchemaNode).schemaName || config.schema;
+      await MermaidService.generate(config, pass, sshPass, schemaName);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.runQueryFile', async (node?: QueryFileNode) => {
+      if (!node) {
+        return;
+      }
+      // The query group owns the connection the file belongs to.
+      const group = node.parent as QueryGroupNode | undefined;
+      if (!group || !group.connectionConfig) {
+        vscode.window.showErrorMessage(t('This script is not linked to a connection.', 'Скрипт не связан с подключением.'));
+        return;
+      }
+      const config = group.dbName ? { ...group.connectionConfig, database: group.dbName } : group.connectionConfig;
+      const pass = await storageService.getPassword(config.id);
+      const sshPass = await storageService.getSshPassword(config.id);
+      await SqlScriptRunner.runFile(node.filePath, config, pass, sshPass);
     })
   );
 

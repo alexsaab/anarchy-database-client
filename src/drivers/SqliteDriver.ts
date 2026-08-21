@@ -1,4 +1,5 @@
-import { BaseDriver } from './BaseDriver.js';
+import fs from 'fs';
+import { BaseDriver, ForeignKeyInfo } from './BaseDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
 
@@ -9,48 +10,70 @@ export class SqliteDriver extends BaseDriver {
     super(config, password);
   }
 
-  async connect(): Promise<void> {
-    if (this.db) {
-      await this.disconnect();
-    }
-
-    let sqlite3: any;
+  /**
+   * SQLite runs on the WebAssembly build rather than the native addon: the
+   * packaged extension ships no node_modules, and a native binary would have to
+   * match the extension host's ABI on every platform. The WASM build is bundled
+   * with the extension and works everywhere.
+   */
+  private static loadSqlite(): any {
     try {
-      sqlite3 = require('sqlite3');
-    } catch (e) {
-      throw new Error('sqlite3 native module is not available in this environment.');
+      return require('node-sqlite3-wasm');
+    } catch (e: any) {
+      throw new Error(`The bundled SQLite engine could not be loaded: ${e?.message || e}`);
+    }
+  }
+
+  private get dbPath(): string {
+    return this.config.dbPath || this.config.database || ':memory:';
+  }
+
+  async connect(): Promise<void> {
+    if (this.isConnected && this.db) {
+      return;
     }
 
-    const dbPath = this.config.dbPath || this.config.database || ':memory:';
-    return new Promise((resolve, reject) => {
-      this.db = new sqlite3.Database(dbPath, (err: any) => {
-        if (err) {
-          reject(err);
-        } else {
-          this.isConnected = true;
-          resolve();
-        }
-      });
+    await this.connectOnce(async () => {
+      if (this.isConnected && this.db) {
+        return;
+      }
+      await this.disconnect().catch(() => {});
+
+      const dbPath = this.dbPath;
+      if (dbPath !== ':memory:' && !fs.existsSync(dbPath)) {
+        throw new Error(`SQLite database file not found: ${dbPath}`);
+      }
+
+      const { Database } = SqliteDriver.loadSqlite();
+      try {
+        this.db = new Database(dbPath);
+      } catch (err: any) {
+        throw new Error(`Could not open SQLite database "${dbPath}": ${err?.message || err}`);
+      }
+      this.isConnected = true;
     });
   }
 
   async disconnect(): Promise<void> {
     if (this.db) {
-      return new Promise((resolve, reject) => {
-        this.db.close((err: any) => {
-          this.db = null;
-          this.isConnected = false;
-          if (err) reject(err);
-          else resolve();
-        });
-      });
+      try {
+        this.db.close();
+      } catch (e) {}
+      this.db = null;
     }
+    this.isConnected = false;
   }
 
   async testConnection(): Promise<{ success: boolean; message?: string }> {
     try {
       await this.connect();
-      return { success: true, message: 'Successfully connected to SQLite database!' };
+      const res = await this.executeQuery('SELECT sqlite_version() AS version;');
+      const version = res.rows[0]?.version;
+      const tables = await this.getTables();
+      return {
+        success: true,
+        message: `Opened SQLite ${version || ''} database "${this.dbPath}" (${tables.length} tables).`,
+      };
     } catch (err: any) {
       return { success: false, message: err.message || 'Connection failed' };
     } finally {
@@ -89,49 +112,61 @@ export class SqliteDriver extends BaseDriver {
     }));
   }
 
-  async getForeignKeys(tableName: string): Promise<any[]> {
-    return [];
+  async getForeignKeys(tableName: string): Promise<ForeignKeyInfo[]> {
+    try {
+      const res = await this.executeQuery(`PRAGMA foreign_key_list("${tableName}");`);
+      return res.rows.map((r: any) => ({
+        // PRAGMA groups the columns of one constraint under a shared id.
+        constraintName: `fk_${tableName}_${r.id}`,
+        columnName: r.from,
+        referencedTable: r.table,
+        // A reference to the parent's primary key leaves "to" null.
+        referencedColumn: r.to || 'rowid',
+      }));
+    } catch (e) {
+      return [];
+    }
   }
 
   async executeQuery(sql: string): Promise<QueryResult> {
     await this.connect();
     const startTime = Date.now();
 
-    return new Promise((resolve, reject) => {
-      const trimmed = sql.trim().toUpperCase();
-      if (trimmed.startsWith('SELECT') || trimmed.startsWith('PRAGMA') || trimmed.startsWith('EXPLAIN')) {
-        this.db.all(sql, [], (err: any, rows: any[]) => {
-          const costTimeMs = Date.now() - startTime;
-          if (err) return reject(err);
+    const trimmed = sql.trim().replace(/^\(+/, '').toUpperCase();
+    const returnsRows =
+      trimmed.startsWith('SELECT') ||
+      trimmed.startsWith('PRAGMA') ||
+      trimmed.startsWith('EXPLAIN') ||
+      trimmed.startsWith('WITH') ||
+      trimmed.startsWith('VALUES') ||
+      / RETURNING /.test(trimmed);
 
-          const sampleRow = rows && rows[0] ? rows[0] : {};
-          const fields: ColumnInfo[] = Object.keys(sampleRow).map((k) => ({
-            name: k,
-            type: 'TEXT',
-            nullable: true,
-          }));
+    if (returnsRows) {
+      const rows: any[] = this.db.all(sql) || [];
+      const costTimeMs = Date.now() - startTime;
 
-          resolve({
-            rows: rows || [],
-            fields,
-            affectedRows: rows ? rows.length : 0,
-            costTimeMs,
-          });
-        });
-      } else {
-        this.db.run(sql, [], function (this: any, err: any) {
-          const costTimeMs = Date.now() - startTime;
-          if (err) return reject(err);
-
-          resolve({
-            rows: [],
-            fields: [],
-            affectedRows: this.changes || 0,
-            costTimeMs,
-          });
-        });
+      // Column names come from the union of the returned rows: SQLite omits
+      // nothing per row, but a NULL-only column still needs a header.
+      const names: string[] = [];
+      for (const row of rows.slice(0, 50)) {
+        for (const k of Object.keys(row)) {
+          if (!names.includes(k)) {
+            names.push(k);
+          }
+        }
       }
-    });
+      const fields: ColumnInfo[] = names.map((k) => ({ name: k, type: 'TEXT', nullable: true }));
+
+      return { rows, fields, affectedRows: rows.length, costTimeMs };
+    }
+
+    const result = this.db.run(sql);
+    return {
+      rows: [],
+      fields: [],
+      affectedRows: result?.changes || 0,
+      costTimeMs: Date.now() - startTime,
+    };
   }
 
   async getTableData(tableName: string, params: PageParams, schemaName?: string): Promise<QueryResult> {

@@ -12,6 +12,18 @@ export interface TableInfo {
   schema?: string;
   type?: 'table' | 'view' | 'collection' | 'bucket' | string;
   comment?: string;
+  /** Elasticsearch: alias names pointing at this index. */
+  aliases?: string[];
+}
+
+/** Elasticsearch alias and the concrete indices behind it. */
+export interface AliasInfo {
+  name: string;
+  indices: string[];
+  /** Index this alias writes to, when several are behind it. */
+  writeIndex?: string;
+  /** True when the alias narrows its indices with a filter. */
+  filtered?: boolean;
 }
 
 export interface QueryResult {

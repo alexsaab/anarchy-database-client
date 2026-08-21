@@ -3,6 +3,7 @@ import https from 'https';
 import { BaseDriver, ForeignKeyInfo } from './BaseDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
+import { parseHost } from '../util/HostUtil.js';
 
 export class ClickhouseDriver extends BaseDriver {
   constructor(config: ConnectionConfig, password?: string) {
@@ -28,15 +29,19 @@ export class ClickhouseDriver extends BaseDriver {
 
   private async httpQuery(query: string): Promise<any> {
     return new Promise((resolve, reject) => {
-      const host = this.config.host || 'localhost';
-      const port = this.config.port || 8123;
+      const endpoint = parseHost(this.config.host, {
+        defaultPort: 8123,
+        configPort: this.config.port,
+        ssl: this.config.ssl,
+      });
+      const host = endpoint.hostname;
+      const port = endpoint.port;
       const user = this.config.user || 'default';
       const pass = this.password || '';
 
-      const isSsl = !!this.config.ssl;
-      const protocol = isSsl ? https : http;
+      const protocol = endpoint.protocol === 'https' ? https : http;
 
-      const path = `/?query=${encodeURIComponent(query)}`;
+      const path = `${endpoint.basePath}/?query=${encodeURIComponent(query)}`;
       const authHeader = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
 
       const req = protocol.request(

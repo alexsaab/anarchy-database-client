@@ -182,6 +182,16 @@
         "command": "dbClient.aiAssistant",
         "title": "%command.aiAssistant%",
         "icon": "$(wand)"
+      },
+      {
+        "command": "dbClient.generateMermaid",
+        "title": "%command.generateMermaid%",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "dbClient.runQueryFile",
+        "title": "%command.runQueryFile%",
+        "icon": "$(play)"
       }
     ],
     "menus": {
@@ -327,6 +337,21 @@
           "command": "dbClient.deleteConnection",
           "when": "view == database-client-explorer && viewItem == connectionNode",
           "group": "z_config@2"
+        },
+        {
+          "command": "dbClient.runQueryFile",
+          "when": "view == database-client-explorer && viewItem == queryFileNode",
+          "group": "inline@0"
+        },
+        {
+          "command": "dbClient.runQueryFile",
+          "when": "view == database-client-explorer && viewItem == queryFileNode",
+          "group": "1_edit@0"
+        },
+        {
+          "command": "dbClient.generateMermaid",
+          "when": "view == database-client-explorer && (viewItem == connectionNode || viewItem == databaseNode || viewItem == schemaNode)",
+          "group": "z_config@1"
         }
       ]
     }
@@ -348,13 +373,13 @@
   "dependencies": {
     "@clickhouse/client": "^1.11.0",
     "@elastic/elasticsearch": "^8.12.0",
-    "elasticsearch": "^16.7.3",
+    "exceljs": "^4.4.0",
     "ioredis": "^5.3.2",
     "mongodb": "^6.3.0",
     "mysql2": "^3.9.1",
+    "node-sqlite3-wasm": "^0.8.60",
     "pg": "^8.11.3",
     "redis": "^4.6.13",
-    "sqlite3": "^5.1.7",
     "ssh2": "^1.15.0"
   }
 }

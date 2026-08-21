@@ -4,16 +4,29 @@ import { DatabaseNode } from './DatabaseNode.js';
 import { TableGroupNode } from './TableGroupNode.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { DriverManager } from '../drivers/DriverManager.js';
+import { ConnectionState } from '../drivers/ConnectionState.js';
 import { IconHelper } from '../util/IconHelper.js';
+import { t } from '../util/i18n.js';
 
 export class ConnectionNode extends BaseNode {
   public config: ConnectionConfig;
   public password?: string;
   public sshPassword?: string;
   public context: vscode.ExtensionContext;
-  public isConnected: boolean = false;
-  public hasError: boolean = false;
-  public errorMessage?: string;
+
+  // Live status is kept in ConnectionState, not on the node: the tree rebuilds
+  // its nodes on every refresh, which would otherwise wipe the indicator.
+  public get isConnected(): boolean {
+    return ConnectionState.getInstance().get(this.config.id).status === 'connected';
+  }
+
+  public get hasError(): boolean {
+    return ConnectionState.getInstance().isLost(this.config.id);
+  }
+
+  public get errorMessage(): string | undefined {
+    return ConnectionState.getInstance().get(this.config.id).errorMessage;
+  }
 
   constructor(config: ConnectionConfig, context: vscode.ExtensionContext, password?: string, sshPassword?: string) {
     super(`conn_${config.id}`, config.name, 'connectionNode', vscode.TreeItemCollapsibleState.Collapsed);
@@ -35,9 +48,15 @@ export class ConnectionNode extends BaseNode {
     const item = new vscode.TreeItem(labelText, vscode.TreeItemCollapsibleState.Collapsed);
 
     if (this.hasError) {
-      item.description = `${this.config.type} ❌ Disconnected (${this.config.host || 'local'}:${this.config.port || ''})`;
-      item.iconPath = new vscode.ThemeIcon('error', new vscode.ThemeColor('charts.red'));
-      item.tooltip = `❌ Connection Error: ${this.errorMessage}\nClick or use Reconnect to retry.`;
+      item.description = `${this.config.type} ${t('❌ Connection lost', '❌ Соединение потеряно')} (${this.config.host || 'local'}:${this.config.port || ''})`;
+      item.iconPath = new vscode.ThemeIcon('debug-disconnect', new vscode.ThemeColor('charts.red'));
+      item.tooltip = new vscode.MarkdownString(
+        `$(debug-disconnect) **${t('Connection lost', 'Соединение потеряно')}** — ${this.config.name}\n\n` +
+          `\`${this.errorMessage || t('The database closed the connection.', 'База данных закрыла соединение.')}\`\n\n` +
+          `[$(sync) ${t('Reconnect', 'Переподключиться')}](command:dbClient.reconnectConnection?${encodeURIComponent(JSON.stringify([this.config.id]))})`
+      );
+      (item.tooltip as vscode.MarkdownString).isTrusted = true;
+      (item.tooltip as vscode.MarkdownString).supportThemeIcons = true;
     } else if (this.isConnected) {
       item.description = `${this.config.type} 🟢 Connected (${this.config.host || 'local'}:${this.config.port || ''})`;
       const themeColor = IconHelper.getThemeColor(this.config.color) || new vscode.ThemeColor('charts.green');
@@ -58,33 +77,33 @@ export class ConnectionNode extends BaseNode {
     return item;
   }
 
-  public async reconnect(): Promise<void> {
-    await DriverManager.getInstance().removeDriver(this.config.id);
-    this.isConnected = false;
-    this.hasError = false;
-    this.errorMessage = undefined;
-
-    try {
-      const driver = await DriverManager.getInstance().getDriver(this.config, this.password, this.sshPassword);
-      await driver.connect();
-      this.isConnected = true;
-      this.hasError = false;
-      vscode.window.showInformationMessage(`Successfully reconnected to ${this.config.name}!`);
-    } catch (err: any) {
-      this.isConnected = false;
-      this.hasError = true;
-      this.errorMessage = err.message;
-      vscode.window.showErrorMessage(`Failed to reconnect to ${this.config.name}: ${err.message}`);
-    }
+  public async reconnect(): Promise<boolean> {
+    return vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: t(`Reconnecting to ${this.config.name}...`, `Переподключение к ${this.config.name}...`),
+      },
+      async () => {
+        try {
+          await DriverManager.getInstance().reconnect(this.config, this.password, this.sshPassword);
+          vscode.window.showInformationMessage(
+            t(`Reconnected to ${this.config.name}.`, `Переподключение к ${this.config.name} выполнено.`)
+          );
+          return true;
+        } catch (err: any) {
+          vscode.window.showErrorMessage(
+            t(`Failed to reconnect to ${this.config.name}: ${err.message}`, `Не удалось переподключиться к ${this.config.name}: ${err.message}`)
+          );
+          return false;
+        }
+      }
+    );
   }
 
   async getChildren(): Promise<BaseNode[]> {
     try {
       const driver = await DriverManager.getInstance().getDriver(this.config, this.password, this.sshPassword);
       await driver.connect();
-      this.isConnected = true;
-      this.hasError = false;
-      this.errorMessage = undefined;
 
       if (this.config.type === 'SQLite') {
         return [new TableGroupNode(this.config, this.password, this.sshPassword, 'main', this)];
@@ -98,10 +117,10 @@ export class ConnectionNode extends BaseNode {
       dbs.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
       return dbs.map((dbName) => new DatabaseNode(dbName, this.config, this.context, this.password, this.sshPassword, this));
     } catch (err: any) {
-      this.isConnected = false;
-      this.hasError = true;
-      this.errorMessage = err.message;
-      vscode.window.showErrorMessage(`Failed to connect to ${this.config.name}: ${err.message}`);
+      ConnectionState.getInstance().markLost(this.config.id, err.message);
+      vscode.window.showErrorMessage(
+        t(`Failed to connect to ${this.config.name}: ${err.message}`, `Не удалось подключиться к ${this.config.name}: ${err.message}`)
+      );
       return [];
     }
   }

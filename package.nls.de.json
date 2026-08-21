@@ -28,5 +28,7 @@
   "command.explainQuery": "Ausführungsplan (EXPLAIN)",
   "command.openRedisEditor": "Redis Key-Value Manager",
   "command.compareData": "Tabellendaten vergleichen & synchronisieren",
-  "command.aiAssistant": "KI-SQL-Assistent"
+  "command.aiAssistant": "KI-SQL-Assistent",
+  "command.generateMermaid": "Mermaid-ER-Diagramm erzeugen",
+  "command.runQueryFile": "SQL-Skript ausführen"
 }

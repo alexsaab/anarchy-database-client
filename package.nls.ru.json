@@ -29,5 +29,7 @@
   "command.explainQuery": "План Выполнения (EXPLAIN)",
   "command.openRedisEditor": "Redis Менеджер Ключей",
   "command.compareData": "Сравнение и Синхронизация Данных",
-  "command.aiAssistant": "ИИ SQL-Помощник"
+  "command.aiAssistant": "ИИ SQL-Помощник",
+  "command.generateMermaid": "Создать ER-диаграмму Mermaid",
+  "command.runQueryFile": "Выполнить SQL-скрипт"
 }

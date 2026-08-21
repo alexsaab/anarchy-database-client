@@ -23,6 +23,16 @@ export class TableNode extends BaseNode {
     const item = new vscode.TreeItem(this.label, vscode.TreeItemCollapsibleState.Collapsed);
     item.iconPath = new vscode.ThemeIcon(this.table.type === 'view' ? 'eye' : 'table');
     item.contextValue = 'tableNode';
+
+    // Elasticsearch: surface the aliases pointing at this index.
+    const aliases = this.table.aliases || [];
+    if (aliases.length > 0) {
+      item.description = `→ ${aliases.join(', ')}`;
+      item.tooltip = new vscode.MarkdownString(
+        `\`${this.table.name}\`\n\n**${aliases.length > 1 ? 'Aliases' : 'Alias'}:** ` +
+          aliases.map((a) => `\`${a}\``).join(', ')
+      );
+    }
     item.command = {
       command: 'dbClient.openTable',
       title: 'Open Table',
