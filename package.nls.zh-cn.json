@@ -30,5 +30,8 @@
   "command.compareData": "表数据对比与同步",
   "command.aiAssistant": "AI SQL 智能助手",
   "command.generateMermaid": "生成 Mermaid ER 图",
-  "command.runQueryFile": "运行 SQL 脚本"
+  "command.runQueryFile": "运行 SQL 脚本",
+  "command.queryHistory": "查询历史",
+  "command.querySnippets": "已保存的 SQL 片段",
+  "command.importData": "导入数据 (CSV / Excel)..."
 }

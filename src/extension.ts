@@ -12,6 +12,7 @@ import { TriggerGroupNode } from './tree/TriggerGroupNode.js';
 import { QueryGroupNode } from './tree/QueryGroupNode.js';
 import { QueryFileNode } from './tree/QueryFileNode.js';
 import { QueryFileStorage } from './storage/QueryFileStorage.js';
+import { QueryHistoryStorage } from './storage/QueryHistoryStorage.js';
 import { ConnectWebviewProvider } from './webview/ConnectWebviewProvider.js';
 import { TableWebviewProvider } from './webview/TableWebviewProvider.js';
 import { TableDesignWebviewProvider } from './webview/TableDesignWebviewProvider.js';
@@ -30,6 +31,7 @@ import { DataSyncWebviewProvider } from './webview/DataSyncWebviewProvider.js';
 import { AiSqlAssistantWebviewProvider } from './webview/AiSqlAssistantWebviewProvider.js';
 import { StatusBarHealthMonitor } from './status/StatusBarHealthMonitor.js';
 import { MermaidService } from './diagram/MermaidService.js';
+import { ImportService } from './import/ImportService.js';
 import { SqlScriptRunner } from './script/SqlScriptRunner.js';
 import { SchemaNode } from './tree/SchemaNode.js';
 import { IconHelper } from './util/IconHelper.js';
@@ -39,6 +41,7 @@ export function activate(context: vscode.ExtensionContext) {
   IconHelper.setExtensionPath(context.extensionPath);
 
   const storageService = new ConnectionStorageService(context);
+  const historyStorage = QueryHistoryStorage.init(context);
   const treeProvider = new DatabaseTreeProvider(context, storageService);
 
   // Register Tree View
@@ -339,6 +342,89 @@ export function activate(context: vscode.ExtensionContext) {
         const sshPass = (node as ConnectionNode).sshPassword;
         await ErdWebviewProvider.show(config, pass, sshPass);
       }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.importData', async (node?: TableNode) => {
+      if (!node || !(node instanceof TableNode)) {
+        return;
+      }
+      await ImportService.importIntoTable(
+        node.table.name,
+        node.connectionConfig,
+        node.password,
+        node.sshPassword,
+        node.table.schema
+      );
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.queryHistory', async () => {
+      const history = historyStorage.getHistory();
+      if (history.length === 0) {
+        vscode.window.showInformationMessage(t('No queries have been run yet.', 'История запросов пуста.'));
+        return;
+      }
+
+      const picked = await vscode.window.showQuickPick(
+        history.map((h) => ({
+          label: h.sql.replace(/\s+/g, ' ').slice(0, 80),
+          description: `${h.connectionName}${h.costTimeMs != null ? ` · ${h.costTimeMs}ms` : ''}`,
+          detail: new Date(h.timestamp).toLocaleString(),
+          item: h,
+        })),
+        { title: t('Query History', 'История запросов'), matchOnDescription: true, matchOnDetail: true }
+      );
+      if (!picked) {
+        return;
+      }
+
+      const openIt = t('Open in editor', 'Открыть в редакторе');
+      const copyIt = t('Copy', 'Скопировать');
+      const saveIt = t('Save as snippet...', 'Сохранить как сниппет...');
+      const choice = await vscode.window.showQuickPick([openIt, copyIt, saveIt], {
+        title: picked.item.sql.replace(/\s+/g, ' ').slice(0, 60),
+      });
+
+      if (choice === copyIt) {
+        await vscode.env.clipboard.writeText(picked.item.sql);
+      } else if (choice === saveIt) {
+        const title = await vscode.window.showInputBox({ prompt: t('Snippet name', 'Название сниппета') });
+        if (title) {
+          await historyStorage.addSnippet(title, picked.item.sql);
+          vscode.window.showInformationMessage(t(`Saved snippet "${title}".`, `Сниппет "${title}" сохранён.`));
+        }
+      } else if (choice === openIt) {
+        const doc = await vscode.workspace.openTextDocument({ content: picked.item.sql, language: 'sql' });
+        await vscode.window.showTextDocument(doc, { preview: false });
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.querySnippets', async () => {
+      const snippets = historyStorage.getSnippets();
+      if (snippets.length === 0) {
+        vscode.window.showInformationMessage(
+          t('No saved snippets yet. Save one from the query history.', 'Сниппетов нет. Сохраните запрос из истории.')
+        );
+        return;
+      }
+      const picked = await vscode.window.showQuickPick(
+        snippets.map((sn) => ({
+          label: sn.title,
+          description: sn.sql.replace(/\s+/g, ' ').slice(0, 70),
+          item: sn,
+        })),
+        { title: t('Saved Snippets', 'Сохранённые сниппеты'), matchOnDescription: true }
+      );
+      if (!picked) {
+        return;
+      }
+      const doc = await vscode.workspace.openTextDocument({ content: picked.item.sql, language: 'sql' });
+      await vscode.window.showTextDocument(doc, { preview: false });
     })
   );
 

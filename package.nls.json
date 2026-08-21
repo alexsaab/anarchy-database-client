@@ -31,5 +31,8 @@
   "command.compareData": "Compare & Sync Table Data",
   "command.aiAssistant": "AI SQL Assistant",
   "command.generateMermaid": "Generate Mermaid ER Diagram",
-  "command.runQueryFile": "Run SQL Script"
+  "command.runQueryFile": "Run SQL Script",
+  "command.queryHistory": "Query History",
+  "command.querySnippets": "Saved SQL Snippets",
+  "command.importData": "Import Data (CSV / Excel)..."
 }

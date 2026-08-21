@@ -31,5 +31,8 @@
   "command.compareData": "Сравнение и Синхронизация Данных",
   "command.aiAssistant": "ИИ SQL-Помощник",
   "command.generateMermaid": "Создать ER-диаграмму Mermaid",
-  "command.runQueryFile": "Выполнить SQL-скрипт"
+  "command.runQueryFile": "Выполнить SQL-скрипт",
+  "command.queryHistory": "История запросов",
+  "command.querySnippets": "Сохранённые сниппеты",
+  "command.importData": "Импорт данных (CSV / Excel)..."
 }

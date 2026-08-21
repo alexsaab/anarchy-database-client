@@ -192,6 +192,21 @@
         "command": "dbClient.runQueryFile",
         "title": "%command.runQueryFile%",
         "icon": "$(play)"
+      },
+      {
+        "command": "dbClient.queryHistory",
+        "title": "%command.queryHistory%",
+        "icon": "$(history)"
+      },
+      {
+        "command": "dbClient.querySnippets",
+        "title": "%command.querySnippets%",
+        "icon": "$(bookmark)"
+      },
+      {
+        "command": "dbClient.importData",
+        "title": "%command.importData%",
+        "icon": "$(cloud-upload)"
       }
     ],
     "menus": {
@@ -205,6 +220,11 @@
           "command": "dbClient.refreshTree",
           "when": "view == database-client-explorer",
           "group": "navigation@2"
+        },
+        {
+          "command": "dbClient.queryHistory",
+          "when": "view == database-client-explorer",
+          "group": "navigation@5"
         }
       ],
       "view/item/context": [
@@ -352,6 +372,11 @@
           "command": "dbClient.generateMermaid",
           "when": "view == database-client-explorer && (viewItem == connectionNode || viewItem == databaseNode || viewItem == schemaNode)",
           "group": "z_config@1"
+        },
+        {
+          "command": "dbClient.importData",
+          "when": "view == database-client-explorer && viewItem == tableNode",
+          "group": "1_data@1"
         }
       ]
     }

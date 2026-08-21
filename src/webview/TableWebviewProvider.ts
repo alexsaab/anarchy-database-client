@@ -7,6 +7,7 @@ import { TableNode } from '../tree/TableNode.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { PageParams, QueryResult } from '../model/QueryTypes.js';
 import { ExportService } from '../export/ExportService.js';
+import { QueryHistoryStorage } from '../storage/QueryHistoryStorage.js';
 import { isRussian, t } from '../util/i18n.js';
 
 export class TableWebviewProvider {
@@ -297,6 +298,7 @@ export class TableWebviewProvider {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
             const res = await driver.executeQuery(msg.sql);
             lastResult = res;
+            await QueryHistoryStorage.record(msg.sql, connectionConfig.name, res.costTimeMs);
             panel.webview.postMessage({ type: 'queryResult', result: res });
           } catch (err: any) {
             panel.webview.postMessage({ type: 'error', message: err.message });

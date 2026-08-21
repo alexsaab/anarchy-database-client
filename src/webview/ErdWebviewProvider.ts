@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { DriverManager } from '../drivers/DriverManager.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { isRussian, t } from '../util/i18n.js';
+import { MermaidService } from '../diagram/MermaidService.js';
 
 export class ErdWebviewProvider {
   public static async show(connectionConfig: ConnectionConfig, password?: string, sshPassword?: string) {
@@ -23,7 +24,7 @@ export class ErdWebviewProvider {
       const tableDataList = [];
       const allRelations = [];
 
-      for (const tbl of tables.slice(0, 30)) {
+      for (const tbl of tables) {
         try {
           const columns = await driver.getColumns(tbl.name, connectionConfig.database, tbl.schema);
           let fks: any[] = [];
@@ -66,20 +67,15 @@ export class ErdWebviewProvider {
     const tablesJson = JSON.stringify(tables);
     const relationsJson = JSON.stringify(relations);
 
-    let mermaidCode = 'erDiagram\n';
-    tables.forEach((t) => {
-      mermaidCode += `    "${t.name}" {\n`;
-      t.columns.forEach((c: any) => {
-        const cleanType = (c.type || 'string').replace(/[\s(),]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'string';
-        const cleanName = c.name.replace(/[\s()-]/g, '_');
-        const keyType = c.isPrimaryKey ? 'PK' : t.foreignKeys.some((f: any) => f.columnName === c.name) ? 'FK' : '';
-        mermaidCode += `        ${cleanType} ${cleanName} ${keyType}\n`;
-      });
-      mermaidCode += `    }\n`;
-    });
-    relations.forEach((r) => {
-      mermaidCode += `    "${r.toTable}" ||--o{ "${r.fromTable}" : "${r.fromCol}"\n`;
-    });
+    // One Mermaid generator for the whole extension, covered by its own tests.
+    const mermaidCode = MermaidService.build(
+      databaseName,
+      tables.map((tbl: any) => ({
+        table: { name: tbl.name, schema: tbl.schema },
+        columns: tbl.columns || [],
+        foreignKeys: tbl.foreignKeys || [],
+      }))
+    );
 
     const mermaidCodeJson = JSON.stringify(mermaidCode);
 

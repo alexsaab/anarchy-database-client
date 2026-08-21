@@ -5,6 +5,7 @@ import { DriverManager } from '../drivers/DriverManager.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { QueryResult } from '../model/QueryTypes.js';
 import { t } from '../util/i18n.js';
+import { QueryHistoryStorage } from '../storage/QueryHistoryStorage.js';
 
 export interface SqlStatement {
   sql: string;
@@ -226,6 +227,7 @@ export class SqlScriptRunner {
           const preview = statement.sql.replace(/\s+/g, ' ').slice(0, 120);
           try {
             const result = await driver.executeQuery(statement.sql);
+            await QueryHistoryStorage.record(statement.sql, connectionConfig.name, result.costTimeMs);
             const rowCount = result.rows ? result.rows.length : 0;
             outcomes.push({
               statement,

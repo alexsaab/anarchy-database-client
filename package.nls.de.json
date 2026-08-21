@@ -30,5 +30,8 @@
   "command.compareData": "Tabellendaten vergleichen & synchronisieren",
   "command.aiAssistant": "KI-SQL-Assistent",
   "command.generateMermaid": "Mermaid-ER-Diagramm erzeugen",
-  "command.runQueryFile": "SQL-Skript ausführen"
+  "command.runQueryFile": "SQL-Skript ausführen",
+  "command.queryHistory": "Abfrageverlauf",
+  "command.querySnippets": "Gespeicherte SQL-Snippets",
+  "command.importData": "Daten importieren (CSV / Excel)..."
 }

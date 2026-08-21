@@ -18,10 +18,31 @@ export interface FavoriteSnippet {
 export class QueryHistoryStorage {
   private static readonly HISTORY_KEY = 'db_client_query_history';
   private static readonly SNIPPETS_KEY = 'db_client_query_snippets';
+  private static shared: QueryHistoryStorage | undefined;
+
   private context: vscode.ExtensionContext;
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
+  }
+
+  /** Registered once at activation so any caller can record without plumbing. */
+  public static init(context: vscode.ExtensionContext): QueryHistoryStorage {
+    QueryHistoryStorage.shared = new QueryHistoryStorage(context);
+    return QueryHistoryStorage.shared;
+  }
+
+  public static get instance(): QueryHistoryStorage | undefined {
+    return QueryHistoryStorage.shared;
+  }
+
+  /** Best-effort: history must never break the query that produced it. */
+  public static async record(sql: string, connectionName: string, costTimeMs?: number): Promise<void> {
+    try {
+      await QueryHistoryStorage.shared?.addHistory(sql, connectionName, costTimeMs);
+    } catch (e) {
+      // ignore
+    }
   }
 
   public getHistory(): HistoryItem[] {
