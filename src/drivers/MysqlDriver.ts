@@ -5,89 +5,139 @@ import { ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTy
 import { buildSearchClause } from '../sql/SearchClause.js';
 
 export class MysqlDriver extends BaseDriver {
-  private connection: mysql.Connection | null = null;
+  /**
+   * A pool rather than one connection: tree expansion, the grid and the
+   * status-bar ping run concurrently, and a single connection serialises them.
+   */
+  private pool: mysql.Pool | null = null;
+
+  /** Connection ids of statements in flight, so they can be killed. */
+  private running: Map<number, number> = new Map();
+  private nextQueryId = 1;
 
   constructor(config: ConnectionConfig, password?: string) {
     super(config, password);
   }
 
-  private isSocketDead(): boolean {
-    const connAny = this.connection as any;
-    return !!connAny && !!(connAny._closing || connAny._ended || connAny.stream?.destroyed || connAny.stream?.writable === false);
+  private connectionOptions(): mysql.ConnectionOptions {
+    return {
+      host: this.config.host || 'localhost',
+      port: this.config.port || 3306,
+      user: this.config.user || 'root',
+      password: this.password || '',
+      database: this.config.database || undefined,
+      multipleStatements: true,
+    };
   }
 
   async connect(): Promise<void> {
-    if (this.isSocketDead()) {
-      this.connection = null;
-      this.isConnected = false;
-    }
-
-    if (this.isConnected && this.connection) {
+    if (this.isConnected && this.pool) {
       return;
     }
 
     await this.connectOnce(async () => {
-      if (this.isConnected && this.connection && !this.isSocketDead()) {
+      if (this.isConnected && this.pool) {
         return;
       }
+      await this.disconnect().catch(() => {});
 
-      const connection = await mysql.createConnection({
-        host: this.config.host || 'localhost',
-        port: this.config.port || 3306,
-        user: this.config.user || 'root',
-        password: this.password || '',
-        database: this.config.database || undefined,
-        multipleStatements: true,
+      const pool = mysql.createPool({
+        ...this.connectionOptions(),
+        waitForConnections: true,
+        connectionLimit: 4,
+        maxIdle: 2,
+        idleTimeout: 30000,
+        enableKeepAlive: true,
       });
 
-      (connection as any).on('error', (err: any) => {
-        // Only retire the connection if it is still the active one.
-        if (this.connection === connection) {
-          this.connection = null;
-          this.isConnected = false;
-          this.markLost(err);
-        }
-      });
+      // Fail fast on bad credentials or an unreachable host.
+      const probe = await pool.getConnection();
+      probe.release();
 
-      this.connection = connection;
+      this.pool = pool;
       this.isConnected = true;
     });
   }
 
-  /**
-   * Returns a live connection. Never use this.connection directly after an
-   * await: the 'error' handler can null it in between.
-   */
-  private async acquireConnection(): Promise<mysql.Connection> {
+  private async acquirePool(): Promise<mysql.Pool> {
     await this.connect();
-    const connection = this.connection;
-    if (!connection) {
+    const pool = this.pool;
+    if (!pool) {
       throw Object.assign(new Error('Connection to the database was lost.'), { code: 'PROTOCOL_CONNECTION_LOST' });
     }
-    return connection;
+    return pool;
   }
 
-  private async queryWithRetry(sql: string, params?: any[]): Promise<any> {
-    return this.withReconnect(async () => {
-      const connection = await this.acquireConnection();
-      return await connection.query(sql, params);
-    });
+  /**
+   * Runs work on one pooled connection, remembering its connection id so the
+   * statement can be killed while it runs.
+   */
+  private async runOnConnection<T>(fn: (conn: mysql.PoolConnection) => Promise<T>, queryId?: number): Promise<T> {
+    const pool = await this.acquirePool();
+    const conn = await pool.getConnection();
+    try {
+      if (queryId != null) {
+        this.running.set(queryId, (conn as any).threadId);
+      }
+      return await fn(conn);
+    } finally {
+      if (queryId != null) {
+        this.running.delete(queryId);
+      }
+      conn.release();
+    }
+  }
+
+  public get supportsCancellation(): boolean {
+    return true;
+  }
+
+  public beginQueryId(): number {
+    return this.nextQueryId++;
+  }
+
+  public async cancelQuery(queryId: number): Promise<boolean> {
+    const threadId = this.running.get(queryId);
+    if (threadId == null) {
+      return false;
+    }
+    // KILL QUERY needs its own connection; the pooled one is busy running the
+    // statement being killed.
+    let killer: mysql.Connection | null = null;
+    try {
+      killer = await mysql.createConnection(this.connectionOptions());
+      await killer.query(`KILL QUERY ${Number(threadId)}`);
+      return true;
+    } catch (e) {
+      return false;
+    } finally {
+      try {
+        await killer?.end();
+      } catch (e) {}
+    }
+  }
+
+  private async queryWithRetry(sql: string, params?: any[], queryId?: number): Promise<any> {
+    return this.withReconnect(async () =>
+      this.runOnConnection(async (conn) => conn.query(sql, params), queryId)
+    );
   }
 
   async disconnect(): Promise<void> {
-    if (this.connection) {
+    this.isConnected = false;
+    this.running.clear();
+    if (this.pool) {
+      const pool = this.pool;
+      this.pool = null;
       try {
-        await this.connection.end();
+        await pool.end();
       } catch (e) {}
-      this.connection = null;
-      this.isConnected = false;
     }
   }
 
   async testConnection(): Promise<{ success: boolean; message?: string }> {
     try {
-      const connection = await this.acquireConnection();
-      await connection.ping();
+      await this.executeQuery('SELECT 1');
       return { success: true, message: 'Successfully connected to MySQL database!' };
     } catch (err: any) {
       return { success: false, message: err.message || 'Connection failed' };
@@ -276,7 +326,7 @@ export class MysqlDriver extends BaseDriver {
     }));
   }
 
-  async executeQuery(sql: string): Promise<QueryResult> {
+  async executeQuery(sql: string, queryId?: number): Promise<QueryResult> {
     const startTime = Date.now();
 
     const db = this.config.database;
@@ -286,7 +336,7 @@ export class MysqlDriver extends BaseDriver {
       } catch (e) {}
     }
 
-    const [results, fields] = await this.queryWithRetry(sql);
+    const [results, fields] = await this.queryWithRetry(sql, undefined, queryId);
     const costTimeMs = Date.now() - startTime;
 
     if (Array.isArray(results)) {
@@ -317,9 +367,9 @@ export class MysqlDriver extends BaseDriver {
     return true;
   }
 
-  public async executeParameterized(sql: string, params: any[]): Promise<QueryResult> {
+  public async executeParameterized(sql: string, params: any[], queryId?: number): Promise<QueryResult> {
     const startTime = Date.now();
-    const [results, fields] = await this.queryWithRetry(sql, params);
+    const [results, fields] = await this.queryWithRetry(sql, params, queryId);
     const costTimeMs = Date.now() - startTime;
 
     if (Array.isArray(results)) {

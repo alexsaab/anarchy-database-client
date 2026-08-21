@@ -226,7 +226,18 @@ export class SqlScriptRunner {
 
           const preview = statement.sql.replace(/\s+/g, ' ').slice(0, 120);
           try {
-            const result = await driver.executeQuery(statement.sql);
+            // Cancelling the progress notification stops the statement on the
+            // server, not just the loop around it.
+            const queryId = driver.beginQueryId();
+            const onCancel = token.onCancellationRequested(() => {
+              driver.cancelQuery(queryId).catch(() => {});
+            });
+            let result;
+            try {
+              result = await driver.executeQuery(statement.sql, queryId);
+            } finally {
+              onCancel.dispose();
+            }
             await QueryHistoryStorage.record(statement.sql, connectionConfig.name, result.costTimeMs);
             const rowCount = result.rows ? result.rows.length : 0;
             outcomes.push({

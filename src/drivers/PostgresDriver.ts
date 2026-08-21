@@ -5,82 +5,139 @@ import { ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTy
 import { buildSearchClause } from '../sql/SearchClause.js';
 
 export class PostgresDriver extends BaseDriver {
-  private client: pg.Client | null = null;
+  /**
+   * A pool rather than a single client: the tree, the grid and the status-bar
+   * ping all query concurrently, and one connection serialises them so a slow
+   * query freezes the whole extension.
+   */
+  private pool: pg.Pool | null = null;
+
+  /** Backend PIDs of statements in flight, so they can be cancelled. */
+  private running: Map<number, { pid: number | null }> = new Map();
+  private nextQueryId = 1;
 
   constructor(config: ConnectionConfig, password?: string) {
     super(config, password);
   }
 
+  private poolConfig(): pg.PoolConfig {
+    return {
+      host: this.config.host || 'localhost',
+      port: this.config.port || 5432,
+      user: this.config.user || 'postgres',
+      password: this.password || '',
+      database: this.config.database || 'postgres',
+      ssl: this.config.ssl ? { rejectUnauthorized: false } : undefined,
+      max: 4,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 15000,
+    };
+  }
+
   async connect(): Promise<void> {
-    if (this.isConnected && this.client) {
+    if (this.isConnected && this.pool) {
       return;
     }
     await this.connectOnce(async () => {
-      if (this.isConnected && this.client) {
+      if (this.isConnected && this.pool) {
         return;
       }
       await this.disconnect().catch(() => {});
 
-      const client = new pg.Client({
-        host: this.config.host || 'localhost',
-        port: this.config.port || 5432,
-        user: this.config.user || 'postgres',
-        password: this.password || '',
-        database: this.config.database || 'postgres',
-        ssl: this.config.ssl ? { rejectUnauthorized: false } : undefined,
-      });
-
-      client.on('error', (err: any) => {
-        // Only retire the client if it is still the active one: a later
-        // reconnect may already have replaced it.
-        if (this.client === client) {
-          this.isConnected = false;
-          this.client = null;
+      const pool = new pg.Pool(this.poolConfig());
+      // An idle client erroring must not take the process down, and must not
+      // retire a pool that has already been replaced.
+      pool.on('error', (err: any) => {
+        if (this.pool === pool) {
           this.markLost(err);
         }
       });
-      client.on('end', () => {
-        if (this.client === client) {
-          this.isConnected = false;
-          this.client = null;
-        }
-      });
 
-      await client.connect();
-      this.client = client;
+      // Fail fast if the credentials or host are wrong.
+      const probe = await pool.connect();
+      probe.release();
+
+      this.pool = pool;
       this.isConnected = true;
     });
   }
 
-  /**
-   * Returns a live client. Never hand out this.client directly: it can be
-   * nulled by an 'error' event between the await and the call site.
-   */
-  private async acquireClient(): Promise<pg.Client> {
+  private async acquirePool(): Promise<pg.Pool> {
     await this.connect();
-    const client = this.client;
-    if (!client) {
+    const pool = this.pool;
+    if (!pool) {
       throw Object.assign(new Error('Connection to the database was lost.'), { code: 'CONNECTION_CLOSED' });
     }
-    return client;
+    return pool;
   }
 
   async disconnect(): Promise<void> {
     this.isConnected = false;
-    if (this.client) {
-      this.client.removeAllListeners('error');
-      this.client.removeAllListeners('end');
+    this.running.clear();
+    if (this.pool) {
+      const pool = this.pool;
+      this.pool = null;
+      pool.removeAllListeners('error');
       try {
-        await this.client.end();
+        await pool.end();
       } catch (e) {}
-      this.client = null;
+    }
+  }
+
+  /**
+   * Runs a statement on its own pooled connection, recording the backend PID so
+   * the query can be cancelled while it runs.
+   */
+  private async runOnClient<T>(fn: (client: pg.PoolClient) => Promise<T>, queryId?: number): Promise<T> {
+    const pool = await this.acquirePool();
+    const client = await pool.connect();
+    try {
+      if (queryId != null) {
+        const pidRes = await client.query('SELECT pg_backend_pid() AS pid');
+        this.running.set(queryId, { pid: Number(pidRes.rows[0]?.pid) || null });
+      }
+      return await fn(client);
+    } finally {
+      if (queryId != null) {
+        this.running.delete(queryId);
+      }
+      client.release();
+    }
+  }
+
+  public get supportsCancellation(): boolean {
+    return true;
+  }
+
+  public beginQueryId(): number {
+    return this.nextQueryId++;
+  }
+
+  /** Asks the server to cancel a running statement, on a separate connection. */
+  public async cancelQuery(queryId: number): Promise<boolean> {
+    const entry = this.running.get(queryId);
+    if (!entry || entry.pid == null) {
+      return false;
+    }
+    // A cancel must not queue behind the query it is cancelling, so it gets its
+    // own short-lived connection rather than one from the pool.
+    const canceller = new pg.Client(this.poolConfig());
+    try {
+      await canceller.connect();
+      await canceller.query('SELECT pg_cancel_backend($1)', [entry.pid]);
+      return true;
+    } catch (e) {
+      return false;
+    } finally {
+      try {
+        await canceller.end();
+      } catch (e) {}
     }
   }
 
   async testConnection(): Promise<{ success: boolean; message?: string }> {
     try {
-      const client = await this.acquireClient();
-      await client.query('SELECT 1;');
+      await this.executeQuery('SELECT 1;');
       return { success: true, message: 'Successfully connected to PostgreSQL database!' };
     } catch (err: any) {
       return { success: false, message: err.message || 'Connection failed' };
@@ -207,28 +264,23 @@ export class PostgresDriver extends BaseDriver {
     }));
   }
 
-  async executeQuery(sql: string): Promise<QueryResult> {
-    const runQuery = async () => {
-      const client = await this.acquireClient();
-      const startTime = Date.now();
-      const result = await client.query(sql);
-      const costTimeMs = Date.now() - startTime;
-
-      const columnFields: ColumnInfo[] = (result.fields || []).map((f: any) => ({
-        name: f.name,
-        type: String(f.dataTypeID),
-        nullable: true,
-      }));
-
-      return {
-        rows: result.rows || [],
-        fields: columnFields,
-        affectedRows: result.rowCount || 0,
-        costTimeMs,
-      };
-    };
-
-    return this.withReconnect(runQuery);
+  async executeQuery(sql: string, queryId?: number): Promise<QueryResult> {
+    return this.withReconnect(async () => {
+      return this.runOnClient(async (client) => {
+        const startTime = Date.now();
+        const result = await client.query(sql);
+        return {
+          rows: result.rows || [],
+          fields: (result.fields || []).map((f: any) => ({
+            name: f.name,
+            type: String(f.dataTypeID),
+            nullable: true,
+          })),
+          affectedRows: result.rowCount || 0,
+          costTimeMs: Date.now() - startTime,
+        };
+      }, queryId);
+    });
   }
 
   public get supportsParameterizedQueries(): boolean {
@@ -239,17 +291,18 @@ export class PostgresDriver extends BaseDriver {
     return `$${index}`;
   }
 
-  public async executeParameterized(sql: string, params: any[]): Promise<QueryResult> {
+  public async executeParameterized(sql: string, params: any[], queryId?: number): Promise<QueryResult> {
     return this.withReconnect(async () => {
-      const client = await this.acquireClient();
-      const startTime = Date.now();
-      const result = await client.query(sql, params);
-      return {
-        rows: result.rows || [],
-        fields: (result.fields || []).map((f: any) => ({ name: f.name, type: String(f.dataTypeID), nullable: true })),
-        affectedRows: result.rowCount || 0,
-        costTimeMs: Date.now() - startTime,
-      };
+      return this.runOnClient(async (client) => {
+        const startTime = Date.now();
+        const result = await client.query(sql, params);
+        return {
+          rows: result.rows || [],
+          fields: (result.fields || []).map((f: any) => ({ name: f.name, type: String(f.dataTypeID), nullable: true })),
+          affectedRows: result.rowCount || 0,
+          costTimeMs: Date.now() - startTime,
+        };
+      }, queryId);
     });
   }
 

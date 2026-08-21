@@ -290,18 +290,38 @@ export class TableWebviewProvider {
     );
 
     let lastResult: QueryResult | null = null;
+    let runningQuery: { driver: BaseDriver; queryId: number } | null = null;
 
     panel.webview.onDidReceiveMessage(async (msg) => {
       switch (msg.type) {
         case 'executeSql':
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
-            const res = await driver.executeQuery(msg.sql);
-            lastResult = res;
-            await QueryHistoryStorage.record(msg.sql, connectionConfig.name, res.costTimeMs);
-            panel.webview.postMessage({ type: 'queryResult', result: res });
+            // Track the statement so the Cancel button can stop it server-side.
+            const queryId = driver.beginQueryId();
+            runningQuery = { driver, queryId };
+            panel.webview.postMessage({ type: 'queryStarted', cancellable: driver.supportsCancellation });
+            try {
+              const res = await driver.executeQuery(msg.sql, queryId);
+              lastResult = res;
+              await QueryHistoryStorage.record(msg.sql, connectionConfig.name, res.costTimeMs);
+              panel.webview.postMessage({ type: 'queryResult', result: res });
+            } finally {
+              runningQuery = null;
+              panel.webview.postMessage({ type: 'queryFinished' });
+            }
           } catch (err: any) {
             panel.webview.postMessage({ type: 'error', message: err.message });
+          }
+          break;
+        case 'cancelQuery':
+          if (runningQuery) {
+            const cancelled = await runningQuery.driver.cancelQuery(runningQuery.queryId);
+            if (!cancelled) {
+              vscode.window.showWarningMessage(
+                t('The query could not be cancelled.', 'Не удалось отменить запрос.')
+              );
+            }
           }
           break;
         case 'export':
@@ -988,6 +1008,8 @@ export class TableWebviewProvider {
       title: ru ? '⚡ SQL Консоль Запросов' : '⚡ SQL Query Console',
       ph: ru ? 'Введите SQL-запрос (например, SELECT * FROM users LIMIT 10;)' : 'Enter SQL query here (e.g. SELECT * FROM users LIMIT 10;)',
       run: ru ? '▶ Выполнить (Ctrl+Enter)' : '▶ Run Query (Ctrl+Enter)',
+      cancel2: ru ? '■ Отменить' : '■ Cancel',
+      running: ru ? 'Выполняется...' : 'Running...',
       export: ru ? 'Экспорт:' : 'Export:',
       affected: ru ? 'Изменено' : 'Affected',
       time: ru ? 'Время' : 'Time',
@@ -1081,6 +1103,7 @@ export class TableWebviewProvider {
   <textarea id="sqlInput" placeholder="${text.ph}">${TableWebviewProvider.escapeHtml(initialSql || 'SELECT 1;')}</textarea>
   <div class="actions">
     <button id="runBtn">${text.run}</button>
+    <button id="cancelBtn" class="danger" style="display:none;">${text.cancel2}</button>
 
     <span style="border-left: 1px solid #555; margin: 0 5px; height: 18px;"></span>
 
@@ -1105,10 +1128,18 @@ export class TableWebviewProvider {
   <script>
     const vscode = acquireVsCodeApi();
 
+    const runBtn = document.getElementById('runBtn');
+    const cancelBtn = document.getElementById('cancelBtn');
+
     function run() {
       const sql = document.getElementById('sqlInput').value;
       vscode.postMessage({ type: 'executeSql', sql });
     }
+
+    cancelBtn.onclick = () => {
+      cancelBtn.disabled = true;
+      vscode.postMessage({ type: 'cancelQuery' });
+    };
 
     function exportData(format) {
       vscode.postMessage({ type: 'export', format });
@@ -1126,8 +1157,26 @@ export class TableWebviewProvider {
       const errorBox = document.getElementById('errorBox');
 
       if (msg.type === 'error') {
+        runBtn.disabled = false;
+        cancelBtn.style.display = 'none';
         errorBox.style.display = 'block';
         errorBox.innerText = '${text.err} ' + msg.message;
+        return;
+      }
+
+      if (msg.type === 'queryStarted') {
+        runBtn.disabled = true;
+        document.getElementById('costTime').innerText = '${text.running}';
+        if (msg.cancellable) {
+          cancelBtn.style.display = '';
+          cancelBtn.disabled = false;
+        }
+        return;
+      }
+
+      if (msg.type === 'queryFinished') {
+        runBtn.disabled = false;
+        cancelBtn.style.display = 'none';
         return;
       }
 

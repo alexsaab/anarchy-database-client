@@ -134,7 +134,21 @@ export abstract class BaseDriver {
     return `-- DDL for ${type} ${name}\n-- Not implemented for this driver`;
   }
 
-  abstract executeQuery(sql: string): Promise<QueryResult>;
+  abstract executeQuery(sql: string, queryId?: number): Promise<QueryResult>;
+
+  /** True when a running statement can be cancelled server-side. */
+  public get supportsCancellation(): boolean {
+    return false;
+  }
+
+  /** Allocates an id used to track and later cancel one statement. */
+  public beginQueryId(): number {
+    return 0;
+  }
+
+  public async cancelQuery(queryId: number): Promise<boolean> {
+    return false;
+  }
   abstract getTableData(tableName: string, params: PageParams, schemaName?: string): Promise<QueryResult>;
 
   /**
@@ -161,7 +175,7 @@ export abstract class BaseDriver {
    *
    * Drivers without a binding API must override this or leave it unsupported.
    */
-  public async executeParameterized(sql: string, params: any[]): Promise<QueryResult> {
+  public async executeParameterized(sql: string, params: any[], queryId?: number): Promise<QueryResult> {
     throw new Error(`${this.config.type} does not support parameterized statements.`);
   }
 
