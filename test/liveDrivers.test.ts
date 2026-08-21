@@ -12,15 +12,28 @@ import { MysqlDriver } from '../src/drivers/MysqlDriver.js';
 const PG = { id: 'pgt', name: 'pgt', type: 'PostgreSQL', host: '127.0.0.1', port: 55432, user: 'postgres', database: 'testdb' } as any;
 const MY = { id: 'myt', name: 'myt', type: 'MySQL', host: '127.0.0.1', port: 53306, user: 'root', database: 'testdb' } as any;
 
-async function reachable(make: () => any): Promise<boolean> {
-  const d = make();
-  try {
-    const r = await d.testConnection();
-    await d.disconnect();
-    return !!r.success;
-  } catch {
-    return false;
-  }
+/**
+ * Probes with a raw TCP connect rather than a driver.
+ *
+ * Driver-level probes leave their own connection attempts pending (Mongo waits
+ * out server selection, tedious retries), which keeps the event loop alive and
+ * hangs the whole run on a machine with no containers.
+ */
+async function portOpen(host: string, port: number, timeoutMs = 1000): Promise<boolean> {
+  const net = await import('node:net');
+  return new Promise<boolean>((resolve) => {
+    const socket = new net.Socket();
+    const done = (result: boolean) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(result);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+    socket.connect(port, host);
+  });
 }
 
 // Probed lazily inside each test: top-level await is unavailable in CJS output.
@@ -28,12 +41,12 @@ let pgUp: boolean | null = null;
 let myUp: boolean | null = null;
 
 async function requirePg(t: any): Promise<boolean> {
-  if (pgUp === null) pgUp = await reachable(() => new PostgresDriver(PG, 'testpw'));
+  if (pgUp === null) pgUp = await portOpen(PG.host, PG.port);
   if (!pgUp) t.skip('no PostgreSQL on 127.0.0.1:55432');
   return pgUp;
 }
 async function requireMy(t: any): Promise<boolean> {
-  if (myUp === null) myUp = await reachable(() => new MysqlDriver(MY, 'testpw'));
+  if (myUp === null) myUp = await portOpen(MY.host, MY.port);
   if (!myUp) t.skip('no MySQL on 127.0.0.1:53306');
   return myUp;
 }
@@ -220,10 +233,7 @@ describe('MySQL (live)', () => {
 const MG = { id: 'mgt', name: 'mgt', type: 'MongoDB', host: '127.0.0.1', port: 57017, database: 'testdb' } as any;
 let mgUp: boolean | null = null;
 async function requireMongo(t: any): Promise<boolean> {
-  if (mgUp === null) {
-    const { MongoDriver } = await import('../src/drivers/MongoDriver.js');
-    mgUp = await reachable(() => new MongoDriver(MG));
-  }
+  if (mgUp === null) mgUp = await portOpen(MG.host, MG.port);
   if (!mgUp) t.skip('no MongoDB on 127.0.0.1:57017');
   return mgUp;
 }
@@ -276,15 +286,12 @@ let msUp: boolean | null = null;
 let mariaUp: boolean | null = null;
 
 async function requireMssql(t: any): Promise<boolean> {
-  if (msUp === null) {
-    const { MssqlDriver } = await import('../src/drivers/MssqlDriver.js');
-    msUp = await reachable(() => new MssqlDriver(MS, 'Str0ng!Passw0rd'));
-  }
+  if (msUp === null) msUp = await portOpen(MS.host, MS.port);
   if (!msUp) t.skip('no SQL Server on 127.0.0.1:51433');
   return msUp;
 }
 async function requireMaria(t: any): Promise<boolean> {
-  if (mariaUp === null) mariaUp = await reachable(() => new MysqlDriver(MARIA, 'testpw'));
+  if (mariaUp === null) mariaUp = await portOpen(MARIA.host, MARIA.port);
   if (!mariaUp) t.skip('no MariaDB on 127.0.0.1:53307');
   return mariaUp;
 }

@@ -12,3 +12,9 @@ CHAT_HISTORY.md
 .git/**
 .gitignore
 .vscode/**
+
+# Test artefacts: bundles and fixtures never belong in the package.
+out-test/**
+test/**
+scripts/**
+.github/**

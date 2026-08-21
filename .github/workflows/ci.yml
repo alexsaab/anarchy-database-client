@@ -25,6 +25,21 @@ jobs:
       # A packaging failure should not wait until release day.
       - run: npx vsce package --no-dependencies --out /tmp/extension.vsix
 
+      # Test bundles and sources once leaked into the package; keep it small.
+      - name: Check package contents
+        run: |
+          size=$(stat -c%s /tmp/extension.vsix)
+          echo "vsix size: $((size / 1024 / 1024)) MB"
+          if [ "$size" -gt 10485760 ]; then
+            echo "::error::vsix is larger than 10 MB; check .vscodeignore"
+            unzip -l /tmp/extension.vsix | sort -k1 -n -r | head -20
+            exit 1
+          fi
+          if unzip -l /tmp/extension.vsix | grep -E "out-test/|transcript_full|CHAT_HISTORY|extension/src/"; then
+            echo "::error::the package contains files that should be ignored"
+            exit 1
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: extension-vsix
