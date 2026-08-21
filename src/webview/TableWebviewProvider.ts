@@ -251,7 +251,13 @@ export class TableWebviewProvider {
           break;
         case 'export':
           if (lastResult) {
-            await ExportService.exportData(tableName, lastResult, msg.format);
+            const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
+            await ExportService.exportData(tableName, lastResult, msg.format, {
+              totalCount: lastResult.totalCount || lastResult.rows.length,
+              // Same filter and sort as the grid, so the file matches the view.
+              fetchPage: (page, pageSize) =>
+                driver.getTableData(tableName, { ...currentParams, page, pageSize }, schemaName),
+            });
           } else {
             vscode.window.showWarningMessage(t('No data available to export.', 'Нет данных для экспорта.'));
           }
@@ -598,6 +604,7 @@ export class TableWebviewProvider {
         type: 'fetchData',
         params: {
           page: 1,
+          searchTerm: currentSearch || undefined,
           sortField: currentSortField || undefined,
           sortOrder: currentSortOrder || undefined,
         }
@@ -651,12 +658,27 @@ export class TableWebviewProvider {
       });
     };
 
+    // The search runs on the server, so matches on other pages are found too.
+    // Typing is debounced to avoid a query per keystroke.
+    let searchTimer = null;
+    let currentSearch = '';
     document.getElementById('quickSearchInput').oninput = (e) => {
-      const term = e.target.value.toLowerCase();
-      const filtered = allRows.filter(r => {
-        return Object.values(r).some(v => String(v || '').toLowerCase().includes(term));
-      });
-      renderRows(filtered);
+      const term = e.target.value;
+      if (searchTimer) clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => {
+        currentSearch = term;
+        currentPage = 1;
+        vscode.postMessage({
+          type: 'fetchData',
+          params: {
+            page: 1,
+            pageSize,
+            searchTerm: term || undefined,
+            sortField: currentSortField || undefined,
+            sortOrder: currentSortOrder || undefined,
+          }
+        });
+      }, 300);
     };
 
     document.getElementById('addRowBtn').onclick = () => {
@@ -720,6 +742,7 @@ export class TableWebviewProvider {
           type: 'fetchData',
           params: {
             page: currentPage,
+            searchTerm: currentSearch || undefined,
             sortField: currentSortField || undefined,
             sortOrder: currentSortOrder || undefined,
           }
@@ -748,6 +771,7 @@ export class TableWebviewProvider {
           type: 'fetchData',
           params: {
             page: currentPage,
+            searchTerm: currentSearch || undefined,
             sortField: currentSortField || undefined,
             sortOrder: currentSortOrder || undefined,
           }

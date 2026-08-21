@@ -40,4 +40,9 @@ export interface PageParams {
   filterSql?: string;
   sortField?: string;
   sortOrder?: 'ASC' | 'DESC';
+  /**
+   * Free-text search applied by the server across all columns, so matches on
+   * pages other than the current one are still found.
+   */
+  searchTerm?: string;
 }

@@ -2,6 +2,7 @@ import fs from 'fs';
 import { BaseDriver, ForeignKeyInfo } from './BaseDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
+import { sqliteSearchClause } from '../sql/SearchClause.js';
 
 export class SqliteDriver extends BaseDriver {
   private db: any = null;
@@ -196,25 +197,41 @@ export class SqliteDriver extends BaseDriver {
 
   async getTableData(tableName: string, params: PageParams, schemaName?: string): Promise<QueryResult> {
     const offset = (params.page - 1) * params.pageSize;
-    let sql = `SELECT * FROM "${tableName}"`;
-    let countSql = `SELECT COUNT(*) as total FROM "${tableName}"`;
+    const tableRef = `"${tableName}"`;
+
+    const conditions: string[] = [];
+    const searchParams: any[] = [];
 
     if (params.filterSql) {
-      sql += ` WHERE ${params.filterSql}`;
-      countSql += ` WHERE ${params.filterSql}`;
+      conditions.push(`(${params.filterSql})`);
     }
 
+    if (params.searchTerm) {
+      const clause = sqliteSearchClause(await this.getColumns(tableName), params.searchTerm);
+      if (clause.sql) {
+        conditions.push(clause.sql);
+        searchParams.push(...clause.params);
+      }
+    }
+
+    const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+
+    const countSql = `SELECT COUNT(*) as total FROM ${tableRef}${where}`;
+    const countRes = searchParams.length
+      ? await this.executeParameterized(countSql, searchParams)
+      : await this.executeQuery(countSql);
+    const totalCount = parseInt(countRes.rows[0]?.total || '0', 10);
+
+    let sql = `SELECT * FROM ${tableRef}${where}`;
     if (params.sortField) {
       const order = params.sortOrder === 'DESC' ? 'DESC' : 'ASC';
       sql += ` ORDER BY "${params.sortField}" ${order}`;
     }
-
     sql += ` LIMIT ${params.pageSize} OFFSET ${offset};`;
 
-    const countRes = await this.executeQuery(countSql);
-    const totalCount = parseInt(countRes.rows[0]?.total || '0', 10);
-
-    const queryResult = await this.executeQuery(sql);
+    const queryResult = searchParams.length
+      ? await this.executeParameterized(sql, searchParams)
+      : await this.executeQuery(sql);
     queryResult.totalCount = totalCount;
     return queryResult;
   }

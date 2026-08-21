@@ -185,6 +185,23 @@ export class ElasticsearchDriver extends BaseDriver {
       .sort((a: any, b: any) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   }
 
+  /**
+   * Quick-search query. Every token must match (the default is OR, which makes
+   * a nonsense term match anything sharing one word) and each gets a trailing
+   * wildcard so partial values behave like the SQL grid's LIKE search.
+   */
+  private static searchQuery(term: string): any {
+    const escape = (token: string) => token.replace(/([+\-=&|><!(){}\[\]^"~*?:\\/])/g, '\\$1');
+    const query = String(term)
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((token) => `${escape(token)}*`)
+      .join(' ');
+
+    return { simple_query_string: { query, default_operator: 'AND', lenient: true } };
+  }
+
   /** Every alias in the cluster, with the indices it resolves to. */
   async getAliases(): Promise<AliasInfo[]> {
     if (!this.client) {
@@ -277,12 +294,16 @@ export class ElasticsearchDriver extends BaseDriver {
     const startTime = Date.now();
     const from = (params.page - 1) * params.pageSize;
 
+    // Free-text search maps onto Elasticsearch natively rather than through SQL.
+    const query = params.searchTerm ? ElasticsearchDriver.searchQuery(params.searchTerm) : undefined;
+
     let searchRes: any;
     try {
       searchRes = await this.client.search({
         index: indexName,
         from,
         size: params.pageSize,
+        ...(query ? { query } : {}),
         // Without this the count saturates at 10000 and the grid loses the tail pages.
         track_total_hits: true,
       });

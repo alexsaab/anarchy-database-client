@@ -2,6 +2,7 @@ import pg from 'pg';
 import { BaseDriver, ForeignKeyInfo, RoutineInfo, TriggerInfo } from './BaseDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
+import { buildSearchClause } from '../sql/SearchClause.js';
 
 export class PostgresDriver extends BaseDriver {
   private client: pg.Client | null = null;
@@ -256,25 +257,45 @@ export class PostgresDriver extends BaseDriver {
     const offset = (params.page - 1) * params.pageSize;
     const tableRef = `"${schemaName}"."${tableName}"`;
 
-    let sql = `SELECT * FROM ${tableRef}`;
-    let countSql = `SELECT COUNT(*) as total FROM ${tableRef}`;
+    const conditions: string[] = [];
+    const searchParams: any[] = [];
 
     if (params.filterSql) {
-      sql += ` WHERE ${params.filterSql}`;
-      countSql += ` WHERE ${params.filterSql}`;
+      conditions.push(`(${params.filterSql})`);
     }
 
+    if (params.searchTerm) {
+      const columns = await this.getColumns(tableName, this.config.database, schemaName);
+      const clause = buildSearchClause('PostgreSQL', columns, params.searchTerm);
+      if (clause.sql) {
+        conditions.push(clause.sql);
+        searchParams.push(...clause.params);
+      }
+    }
+
+    const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+
+    // Placeholders are numbered, so rewrite the shared `?` form in order.
+    let index = 0;
+    const number = (sql: string) => sql.replace(/\?/g, () => `$${++index}`);
+
+    const countSql = number(`SELECT COUNT(*) as total FROM ${tableRef}${where}`);
+    const countRes = searchParams.length
+      ? await this.executeParameterized(countSql, searchParams)
+      : await this.executeQuery(countSql);
+    const totalCount = parseInt(countRes.rows[0]?.total || '0', 10);
+
+    index = 0;
+    let sql = number(`SELECT * FROM ${tableRef}${where}`);
     if (params.sortField) {
       const order = params.sortOrder === 'DESC' ? 'DESC' : 'ASC';
       sql += ` ORDER BY "${params.sortField}" ${order}`;
     }
-
     sql += ` LIMIT ${params.pageSize} OFFSET ${offset};`;
 
-    const countRes = await this.executeQuery(countSql);
-    const totalCount = parseInt(countRes.rows[0]?.total || '0', 10);
-
-    const queryResult = await this.executeQuery(sql);
+    const queryResult = searchParams.length
+      ? await this.executeParameterized(sql, searchParams)
+      : await this.executeQuery(sql);
     queryResult.totalCount = totalCount;
     return queryResult;
   }

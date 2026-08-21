@@ -112,3 +112,87 @@ test('csv quotes and escapes correctly', async () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a whole-table export streams every page into one file', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fullexport-'));
+  const file = path.join(dir, 'all.csv');
+  try {
+    vscodeStub.__recorded.saveDialogPath = file;
+    vscodeStub.__recorded.quickPickAnswer = 'ALL';   // choose "All rows"
+
+    const TOTAL = 4500;                               // more than one 2000-row page
+    const fetchPage = async (page: number, pageSize: number) => {
+      const start = (page - 1) * pageSize;
+      const rows = [];
+      for (let i = start; i < Math.min(start + pageSize, TOTAL); i++) rows.push({ id: i, name: `n${i}` });
+      return { rows, fields: [{ name: 'id' }, { name: 'name' }], costTimeMs: 0 } as any;
+    };
+
+    const firstPage = await fetchPage(1, 50);
+    await ExportService.exportData('t', { ...firstPage, totalCount: TOTAL }, 'csv', { totalCount: TOTAL, fetchPage });
+
+    const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+    assert.equal(lines[0], '"id","name"');
+    assert.equal(lines.length, TOTAL + 1, 'header plus every row');
+    assert.equal(lines[1], '"0","n0"');
+    assert.equal(lines[TOTAL], `"${TOTAL - 1}","n${TOTAL - 1}"`);
+  } finally {
+    vscodeStub.__recorded.saveDialogPath = null;
+    vscodeStub.__recorded.quickPickAnswer = null;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a streamed json export is a single valid array', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fullexport2-'));
+  const file = path.join(dir, 'all.json');
+  try {
+    vscodeStub.__recorded.saveDialogPath = file;
+    vscodeStub.__recorded.quickPickAnswer = 'ALL';
+    const TOTAL = 2500;
+    const fetchPage = async (page: number, pageSize: number) => {
+      const start = (page - 1) * pageSize;
+      const rows = [];
+      for (let i = start; i < Math.min(start + pageSize, TOTAL); i++) rows.push({ id: i });
+      return { rows, fields: [{ name: 'id' }], costTimeMs: 0 } as any;
+    };
+    await ExportService.exportData('t', { rows: [{ id: 0 }], fields: [{ name: 'id' }], totalCount: TOTAL } as any, 'json', { totalCount: TOTAL, fetchPage });
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(parsed.length, TOTAL);
+    assert.equal(parsed[TOTAL - 1].id, TOTAL - 1);
+  } finally {
+    vscodeStub.__recorded.saveDialogPath = null;
+    vscodeStub.__recorded.quickPickAnswer = null;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a streamed workbook contains every row', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fullexport3-'));
+  const file = path.join(dir, 'all.xlsx');
+  try {
+    vscodeStub.__recorded.saveDialogPath = file;
+    vscodeStub.__recorded.quickPickAnswer = 'ALL';
+    const TOTAL = 3000;
+    const fetchPage = async (page: number, pageSize: number) => {
+      const start = (page - 1) * pageSize;
+      const rows = [];
+      for (let i = start; i < Math.min(start + pageSize, TOTAL); i++) rows.push({ id: i, v: i * 1.5 });
+      return { rows, fields: [{ name: 'id' }, { name: 'v' }], costTimeMs: 0 } as any;
+    };
+    await ExportService.exportData('big', { rows: [{ id: 0, v: 0 }], fields: [{ name: 'id' }, { name: 'v' }], totalCount: TOTAL } as any, 'xlsx', { totalCount: TOTAL, fetchPage });
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(file);
+    const ws = wb.worksheets[0];
+    assert.equal(ws.rowCount, TOTAL + 1);
+    assert.equal(ws.getRow(TOTAL + 1).getCell(1).value, TOTAL - 1);
+    assert.equal(typeof ws.getRow(2).getCell(2).value, 'number');
+  } finally {
+    vscodeStub.__recorded.saveDialogPath = null;
+    vscodeStub.__recorded.quickPickAnswer = null;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

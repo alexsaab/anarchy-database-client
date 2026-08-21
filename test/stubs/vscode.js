@@ -6,7 +6,7 @@ class EventEmitter {
   dispose() { this.handlers = []; }
 }
 
-const recorded = { info: [], warn: [], error: [], saveDialogPath: null, progressTitles: [] };
+const recorded = { info: [], warn: [], error: [], saveDialogPath: null, progressTitles: [], quickPickAnswer: null };
 
 module.exports = {
   __recorded: recorded,
@@ -35,7 +35,11 @@ module.exports = {
     showErrorMessage: (m) => { recorded.error.push(m); return Promise.resolve(undefined); },
     showSaveDialog: async () => (recorded.saveDialogPath ? { fsPath: recorded.saveDialogPath } : undefined),
     showTextDocument: async () => {},
-    showQuickPick: async () => undefined,
+    showQuickPick: async (items) => {
+      if (recorded.quickPickAnswer === 'ALL') return Array.isArray(items) ? items[0] : undefined;
+      if (recorded.quickPickAnswer === 'PAGE') return Array.isArray(items) ? items[1] : undefined;
+      return undefined;
+    },
     withProgress: async (opts, task) => { recorded.progressTitles.push(opts.title); return task({ report() {} }, { isCancellationRequested: false }); },
   },
 };
