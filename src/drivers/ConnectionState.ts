@@ -79,9 +79,17 @@ export class ConnectionState {
       return true;
     }
 
-    // A driver whose socket was torn down mid-flight leaves a null handle behind,
-    // which surfaces as "Cannot read properties of null (reading 'query')".
-    if (/Cannot read propert(y|ies) of (null|undefined).*\b(query|execute|end)\b/i.test(msg)) {
+    // A driver whose socket was torn down mid-flight leaves a null handle behind.
+    // V8 words this two ways depending on version:
+    //   "Cannot read properties of null (reading 'query')"   (modern)
+    //   "Cannot read property 'query' of undefined"          (older)
+    // Match on the parts rather than the sentence shape, but keep it pinned to
+    // the driver methods so an unrelated null bug is not retried as an outage.
+    if (
+      /Cannot read propert(?:y|ies)/i.test(msg) &&
+      /\b(?:null|undefined)\b/i.test(msg) &&
+      /\b(?:query|execute|end|prepare|run|all|connect)\b/i.test(msg)
+    ) {
       return true;
     }
 

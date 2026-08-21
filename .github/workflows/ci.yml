@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Typechecks, builds the extension bundle, builds the test bundles and
+      # runs them. The bundle-integrity test needs the real build to exist.
+      - run: npm test
+
+      # A packaging failure should not wait until release day.
+      - run: npx vsce package --no-dependencies --out /tmp/extension.vsix
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension-vsix
+          path: /tmp/extension.vsix

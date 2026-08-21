@@ -1,6 +1,7 @@
 const esbuild = require('esbuild');
 const fs = require('fs');
 const path = require('path');
+const { external } = require('./scripts/bundle-config.js');
 
 /**
  * node-sqlite3-wasm loads its .wasm from `__dirname`, which after bundling is
@@ -27,12 +28,7 @@ async function main() {
     sourcesContent: false,
     platform: 'node',
     outfile: 'out/extension.js',
-    // Only genuinely unbundlable modules stay external: 'vscode' is provided by
-    // the host, 'sqlite3' is a native addon, and the rest are optional deps that
-    // are require()d conditionally. Pure-JS drivers MUST be bundled -- the
-    // packaged extension ships no node_modules, so anything left external is
-    // simply missing at runtime.
-    external: ['vscode', 'pg-native', 'cardinal', 'cpu-features'],
+    external,
     logLevel: 'info',
   });
 
