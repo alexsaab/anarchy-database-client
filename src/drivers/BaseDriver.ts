@@ -136,4 +136,36 @@ export abstract class BaseDriver {
 
   abstract executeQuery(sql: string): Promise<QueryResult>;
   abstract getTableData(tableName: string, params: PageParams, schemaName?: string): Promise<QueryResult>;
+
+  /**
+   * True when the grid may generate SQL INSERT/UPDATE/DELETE for this store.
+   * Document stores and key-value stores must override this: generating SQL for
+   * them produces statements the server cannot parse.
+   */
+  public get supportsSqlWrites(): boolean {
+    return true;
+  }
+
+  /**
+   * Placeholder for the nth (1-based) bound parameter in this dialect.
+   * PostgreSQL numbers them; most others use a positional question mark.
+   */
+  public placeholder(index: number): string {
+    return '?';
+  }
+
+  /**
+   * Runs a statement with bound parameters. Values are never interpolated into
+   * SQL, so quoting, numeric precision and NULL semantics are the driver's job
+   * rather than a string-escaping guess.
+   *
+   * Drivers without a binding API must override this or leave it unsupported.
+   */
+  public async executeParameterized(sql: string, params: any[]): Promise<QueryResult> {
+    throw new Error(`${this.config.type} does not support parameterized statements.`);
+  }
+
+  public get supportsParameterizedQueries(): boolean {
+    return false;
+  }
 }

@@ -144,6 +144,11 @@ export class CouchdbDriver extends BaseDriver {
     });
   }
 
+  /** Not a SQL store: the grid must not generate INSERT/UPDATE/DELETE for it. */
+  public get supportsSqlWrites(): boolean {
+    return false;
+  }
+
   async getDatabases(): Promise<string[]> {
     const res = await this.httpGet('/_all_dbs');
     if (Array.isArray(res)) {

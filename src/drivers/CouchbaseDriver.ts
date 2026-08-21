@@ -79,6 +79,11 @@ export class CouchbaseDriver extends BaseDriver {
     });
   }
 
+  /** Not a SQL store: the grid must not generate INSERT/UPDATE/DELETE for it. */
+  public get supportsSqlWrites(): boolean {
+    return false;
+  }
+
   async getDatabases(): Promise<string[]> {
     const res = await this.httpGet('/pools/default/buckets', 8091);
     if (Array.isArray(res)) {

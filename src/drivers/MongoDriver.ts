@@ -49,6 +49,11 @@ export class MongoDriver extends BaseDriver {
     }
   }
 
+  /** Not a SQL store: the grid must not generate INSERT/UPDATE/DELETE for it. */
+  public get supportsSqlWrites(): boolean {
+    return false;
+  }
+
   async getDatabases(): Promise<string[]> {
     await this.connect();
     const adminDb = this.client.db().admin();

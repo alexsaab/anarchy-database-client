@@ -169,6 +169,31 @@ export class SqliteDriver extends BaseDriver {
     };
   }
 
+  public get supportsParameterizedQueries(): boolean {
+    return true;
+  }
+
+  public async executeParameterized(sql: string, params: any[]): Promise<QueryResult> {
+    await this.connect();
+    const startTime = Date.now();
+    // node-sqlite3-wasm rejects undefined; NULL must be an explicit null.
+    const bound = params.map((p) => (p === undefined ? null : p));
+
+    const trimmed = sql.trim().toUpperCase();
+    if (trimmed.startsWith('SELECT') || trimmed.startsWith('WITH') || / RETURNING /.test(trimmed)) {
+      const rows: any[] = this.db.all(sql, bound) || [];
+      return {
+        rows,
+        fields: Object.keys(rows[0] || {}).map((k) => ({ name: k, type: 'TEXT', nullable: true })),
+        affectedRows: rows.length,
+        costTimeMs: Date.now() - startTime,
+      };
+    }
+
+    const result = this.db.run(sql, bound);
+    return { rows: [], fields: [], affectedRows: result?.changes || 0, costTimeMs: Date.now() - startTime };
+  }
+
   async getTableData(tableName: string, params: PageParams, schemaName?: string): Promise<QueryResult> {
     const offset = (params.page - 1) * params.pageSize;
     let sql = `SELECT * FROM "${tableName}"`;

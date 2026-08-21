@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import { DriverManager } from '../drivers/DriverManager.js';
+import { BaseDriver } from '../drivers/BaseDriver.js';
+import { RowWriter, formatTableRef, quoteId, runBound } from '../sql/RowWriter.js';
 import { ConnectionState } from '../drivers/ConnectionState.js';
 import { TableNode } from '../tree/TableNode.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
@@ -19,24 +21,6 @@ export class TableWebviewProvider {
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
-  }
-
-  private static quoteId(dbType: string, name: string): string {
-    if (dbType === 'MySQL') {
-      return `\`${name}\``;
-    }
-    return `"${name}"`;
-  }
-
-  private static formatTableRef(dbType: string, tableName: string, schemaName?: string, databaseName?: string): string {
-    if (dbType === 'MySQL') {
-      return databaseName ? `\`${databaseName}\`.\`${tableName}\`` : `\`${tableName}\``;
-    }
-    if (dbType === 'SQLite') {
-      return `"${tableName}"`;
-    }
-    const s = schemaName || 'public';
-    return `"${s}"."${tableName}"`;
   }
 
   public static openTable(tableNode: TableNode) {
@@ -156,7 +140,7 @@ export class TableWebviewProvider {
 
     panel.webview.onDidReceiveMessage(async (msg) => {
       const dbType = connectionConfig.type;
-      const tableRef = TableWebviewProvider.formatTableRef(dbType, tableName, schemaName, connectionConfig.database);
+      const tableRef = formatTableRef(dbType, tableName, schemaName, connectionConfig.database);
 
       switch (msg.type) {
         case 'reconnect':
@@ -187,52 +171,82 @@ export class TableWebviewProvider {
           await loadData();
           break;
         case 'updateCell':
-          try {
-            const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
-            const valStr = (msg.newValue === null || msg.isNull) ? 'NULL' : `'${String(msg.newValue).replace(/'/g, "''")}'`;
-            const pkCol = TableWebviewProvider.quoteId(dbType, msg.pkColumn || 'id');
-            const targetCol = TableWebviewProvider.quoteId(dbType, msg.columnName);
-            const pkValStr = typeof msg.pkValue === 'number' ? msg.pkValue : `'${msg.pkValue}'`;
-
-            const updateSql = `UPDATE ${tableRef} SET ${targetCol} = ${valStr} WHERE ${pkCol} = ${pkValStr};`;
-            await driver.executeQuery(updateSql);
-            vscode.window.showInformationMessage(t('Cell updated successfully!', 'Ячейка успешно обновлена!'));
-            await loadData();
-          } catch (e: any) {
-            vscode.window.showErrorMessage(`Update failed: ${e.message}`);
-          }
-          break;
+        case 'deleteRow':
         case 'insertRow':
           try {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
-            const keys = Object.keys(msg.rowData);
-            const colNames = keys.map((k) => TableWebviewProvider.quoteId(dbType, k)).join(', ');
-            const valStrings = keys.map((k) => {
-              const val = msg.rowData[k];
-              if (val === null || val === 'NULL' || val === undefined) return 'NULL';
-              return `'${String(val).replace(/'/g, "''")}'`;
-            }).join(', ');
 
-            const insertSql = `INSERT INTO ${tableRef} (${colNames}) VALUES (${valStrings});`;
-            await driver.executeQuery(insertSql);
-            vscode.window.showInformationMessage(t('Row inserted successfully!', 'Новая строка добавлена!'));
+            if (!driver.supportsSqlWrites) {
+              vscode.window.showWarningMessage(
+                t(
+                  `Editing rows is not supported for ${dbType}; this view is read-only.`,
+                  `Редактирование строк не поддерживается для ${dbType}; просмотр только для чтения.`
+                )
+              );
+              break;
+            }
+
+            const writer = new RowWriter(driver, dbType, tableRef);
+
+            if (msg.type === 'insertRow') {
+              const res = await runBound(driver, writer.insert(msg.rowData || {}));
+              vscode.window.showInformationMessage(
+                t(`Inserted ${res.affectedRows ?? 1} row.`, `Добавлено строк: ${res.affectedRows ?? 1}.`)
+              );
+              await loadData();
+              break;
+            }
+
+            // UPDATE and DELETE must address exactly one row. Without a full
+            // primary key the WHERE clause is a guess that can rewrite or
+            // delete every matching row, so refuse rather than risk it.
+            const rowKey = (msg.rowKey || {}) as Record<string, any>;
+            const keyColumns = Object.keys(rowKey);
+            if (keyColumns.length === 0) {
+              vscode.window.showErrorMessage(
+                t(
+                  `"${tableName}" has no primary key, so a single row cannot be identified safely. Editing is disabled for this table.`,
+                  `У "${tableName}" нет первичного ключа, однозначно определить строку невозможно. Редактирование отключено.`
+                )
+              );
+              break;
+            }
+
+            const statement =
+              msg.type === 'updateCell'
+                ? writer.update(msg.columnName, msg.isNull ? null : msg.newValue, rowKey)
+                : writer.delete(rowKey);
+
+            const res = await runBound(driver, statement);
+            const affected = res.affectedRows ?? 0;
+
+            if (affected === 0) {
+              vscode.window.showWarningMessage(
+                t(
+                  'No row matched — it may have been changed or removed by someone else. Refreshing.',
+                  'Ни одна строка не найдена — возможно, её изменили или удалили. Обновление.'
+                )
+              );
+            } else if (affected > 1) {
+              // The key was supposed to be unique; say so rather than pretending
+              // a single-row edit happened.
+              vscode.window.showWarningMessage(
+                t(
+                  `${affected} rows were affected — "${tableName}" has no unique key over ${keyColumns.join(', ')}.`,
+                  `Затронуто строк: ${affected} — в "${tableName}" нет уникального ключа по ${keyColumns.join(', ')}.`
+                )
+              );
+            } else {
+              vscode.window.showInformationMessage(
+                msg.type === 'updateCell'
+                  ? t('Cell updated.', 'Ячейка обновлена.')
+                  : t('Row deleted.', 'Строка удалена.')
+              );
+            }
             await loadData();
           } catch (e: any) {
-            vscode.window.showErrorMessage(`Insert failed: ${e.message}`);
-          }
-          break;
-        case 'deleteRow':
-          try {
-            const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
-            const pkCol = TableWebviewProvider.quoteId(dbType, msg.pkColumn || 'id');
-            const pkValStr = typeof msg.pkValue === 'number' ? msg.pkValue : `'${msg.pkValue}'`;
-
-            const deleteSql = `DELETE FROM ${tableRef} WHERE ${pkCol} = ${pkValStr};`;
-            await driver.executeQuery(deleteSql);
-            vscode.window.showInformationMessage(t('Row deleted successfully!', 'Строка удалена!'));
-            await loadData();
-          } catch (e: any) {
-            vscode.window.showErrorMessage(`Delete failed: ${e.message}`);
+            const verb = msg.type === 'insertRow' ? 'Insert' : msg.type === 'deleteRow' ? 'Delete' : 'Update';
+            vscode.window.showErrorMessage(`${verb} failed: ${e.message}`);
           }
           break;
         case 'export':
@@ -326,12 +340,16 @@ export class TableWebviewProvider {
       setNull: ru ? 'Установить NULL' : 'Set as NULL',
       reconnect: ru ? '🔄 Переподключиться' : '🔄 Reconnect',
       reconnecting: ru ? 'Переподключение...' : 'Reconnecting...',
+      readOnlyHint: ru
+        ? 'Нет первичного ключа — редактирование недоступно'
+        : 'No primary key — editing is disabled for this table',
     };
 
     return `<!DOCTYPE html>
 <html lang="${ru ? 'ru' : 'en'}">
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:;">
   <title>${ru ? 'Данные' : 'Data'}: ${tableName}</title>
   <style>
     body {
@@ -590,9 +608,12 @@ export class TableWebviewProvider {
       vscode.postMessage({ type: 'export', format });
     }
 
-    function openModal(title, bodyHtml, onConfirm) {
-      document.getElementById('modalTitle').innerText = title;
-      document.getElementById('modalBody').innerHTML = bodyHtml;
+    function openModal(title, body, onConfirm) {
+      document.getElementById('modalTitle').textContent = title;
+      const host = document.getElementById('modalBody');
+      host.textContent = '';
+      // Only nodes: values from the database must never be parsed as markup.
+      host.appendChild(typeof body === 'string' ? document.createTextNode(body) : body);
       document.getElementById('modalOverlay').style.display = 'flex';
 
       const confirmBtn = document.getElementById('modalConfirmBtn');
@@ -641,25 +662,51 @@ export class TableWebviewProvider {
     document.getElementById('addRowBtn').onclick = () => {
       if (currentFields.length === 0) return;
 
-      let fieldsHtml = currentFields.map(f =>
-        '<div class="modal-form-group">' +
-          '<label>' + f.name + ' (' + f.type + ')</label>' +
-          '<div style="display:flex; gap:10px; align-items:center;">' +
-            '<input type="text" id="add_col_' + f.name + '" placeholder="Value..." style="flex:1;">' +
-            '<label style="font-weight:normal; font-size:11px;"><input type="checkbox" id="add_null_' + f.name + '" onchange="document.getElementById(\\'add_col_' + f.name + '\\').disabled = this.checked;"> NULL</label>' +
-          '</div>' +
-        '</div>'
-      ).join('');
+      const form = document.createElement('div');
+      const inputs = {};
 
-      openModal('${text.addRow}', fieldsHtml, () => {
+      currentFields.forEach(f => {
+        const group = document.createElement('div');
+        group.className = 'modal-form-group';
+
+        const label = document.createElement('label');
+        label.textContent = f.name + ' (' + f.type + ')';
+        group.appendChild(label);
+
+        const row = document.createElement('div');
+        row.style.display = 'flex';
+        row.style.gap = '10px';
+        row.style.alignItems = 'center';
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = 'Value...';
+        input.style.flex = '1';
+        row.appendChild(input);
+
+        const nullLabel = document.createElement('label');
+        nullLabel.style.fontWeight = 'normal';
+        nullLabel.style.fontSize = '11px';
+        const nullBox = document.createElement('input');
+        nullBox.type = 'checkbox';
+        nullBox.onchange = () => { input.disabled = nullBox.checked; };
+        nullLabel.appendChild(nullBox);
+        nullLabel.appendChild(document.createTextNode(' NULL'));
+        row.appendChild(nullLabel);
+
+        group.appendChild(row);
+        form.appendChild(group);
+        inputs[f.name] = { input, nullBox };
+      });
+
+      openModal('${text.addRow}', form, () => {
         const rowData = {};
         currentFields.forEach(f => {
-          const isNullChecked = document.getElementById('add_null_' + f.name).checked;
-          const val = document.getElementById('add_col_' + f.name).value;
-          if (isNullChecked) {
+          const { input, nullBox } = inputs[f.name];
+          if (nullBox.checked) {
             rowData[f.name] = null;
-          } else if (val !== '') {
-            rowData[f.name] = val;
+          } else if (input.value !== '') {
+            rowData[f.name] = input.value;
           }
         });
         vscode.postMessage({ type: 'insertRow', rowData });
@@ -708,35 +755,79 @@ export class TableWebviewProvider {
       }
     };
 
-    function editCell(colName, pkCol, pkVal, currentVal) {
+    function editCell(colName, rowKey, currentVal) {
       const isNull = currentVal === 'null';
-      const html =
-        '<div class="modal-form-group">' +
-          '<label>Value for "' + colName + '":</label>' +
-          '<textarea id="cellValInput" style="width:100%; height:90px;" ' + (isNull ? 'disabled' : '') + '>' + (isNull ? '' : currentVal) + '</textarea>' +
-          '<div style="margin-top:8px;">' +
-            '<label style="font-size:12px; font-weight:normal;"><input type="checkbox" id="cellSetNullCheckbox" ' + (isNull ? 'checked' : '') + ' onchange="document.getElementById(\\'cellValInput\\').disabled = this.checked;"> ${text.setNull}</label>' +
-          '</div>' +
-        '</div>';
 
-      openModal('${ru ? 'Редактировать ячейку' : 'Edit Cell'}: ' + colName, html, () => {
-        const setNull = document.getElementById('cellSetNullCheckbox').checked;
-        const newVal = document.getElementById('cellValInput').value;
-        vscode.postMessage({ type: 'updateCell', columnName: colName, pkColumn: pkCol, pkValue: pkVal, newValue: setNull ? null : newVal, isNull: setNull });
+      // Built with DOM APIs, never innerHTML: a cell may contain markup, and
+      // this webview can post messages back to the extension.
+      const wrap = document.createElement('div');
+      wrap.className = 'modal-form-group';
+
+      const label = document.createElement('label');
+      label.textContent = '${ru ? 'Значение' : 'Value for'} "' + colName + '":';
+      wrap.appendChild(label);
+
+      const textarea = document.createElement('textarea');
+      textarea.id = 'cellValInput';
+      textarea.style.width = '100%';
+      textarea.style.height = '90px';
+      textarea.disabled = isNull;
+      textarea.value = isNull ? '' : currentVal;
+      wrap.appendChild(textarea);
+
+      const nullWrap = document.createElement('div');
+      nullWrap.style.marginTop = '8px';
+      const nullLabel = document.createElement('label');
+      nullLabel.style.fontSize = '12px';
+      nullLabel.style.fontWeight = 'normal';
+      const nullBox = document.createElement('input');
+      nullBox.type = 'checkbox';
+      nullBox.id = 'cellSetNullCheckbox';
+      nullBox.checked = isNull;
+      nullBox.onchange = () => { textarea.disabled = nullBox.checked; };
+      nullLabel.appendChild(nullBox);
+      nullLabel.appendChild(document.createTextNode(' ${text.setNull}'));
+      nullWrap.appendChild(nullLabel);
+      wrap.appendChild(nullWrap);
+
+      openModal('${ru ? 'Редактировать ячейку' : 'Edit Cell'}: ' + colName, wrap, () => {
+        vscode.postMessage({
+          type: 'updateCell',
+          columnName: colName,
+          rowKey,
+          newValue: nullBox.checked ? null : textarea.value,
+          isNull: nullBox.checked,
+        });
       });
     }
 
-    function deleteRow(pkCol, pkVal) {
-      const html = '<p>${ru ? 'Удалить строку с первичным ключом' : 'Delete row with PK'} <b>' + pkCol + ' = ' + pkVal + '</b>?</p>';
-      openModal('${ru ? 'Подтвердите удаление' : 'Confirm Deletion'}', html, () => {
-        vscode.postMessage({ type: 'deleteRow', pkColumn: pkCol, pkValue: pkVal });
+    function deleteRow(rowKey) {
+      const p = document.createElement('p');
+      p.textContent = '${ru ? 'Удалить строку' : 'Delete row'} ' +
+        Object.keys(rowKey).map(k => k + ' = ' + rowKey[k]).join(', ') + '?';
+      openModal('${ru ? 'Подтвердите удаление' : 'Confirm Deletion'}', p, () => {
+        vscode.postMessage({ type: 'deleteRow', rowKey });
       });
+    }
+
+    // Columns that identify one row. Without them the grid stays read-only:
+    // a WHERE clause built from a non-unique column can rewrite every match.
+    function keyColumns() {
+      return currentFields.filter(f => f.isPrimaryKey).map(f => f.name);
+    }
+
+    function rowKeyOf(row) {
+      const keys = keyColumns();
+      if (keys.length === 0) return null;
+      const key = {};
+      for (const k of keys) key[k] = row[k];
+      return key;
     }
 
     function renderRows(rows) {
-      const pkField = currentFields.find(f => f.isPrimaryKey) || currentFields[0];
+      const editable = keyColumns().length > 0;
       const body = document.getElementById('tableBody');
-      body.innerHTML = '';
+      body.textContent = '';
 
       rows.forEach((row, idx) => {
         const tr = document.createElement('tr');
@@ -745,32 +836,38 @@ export class TableWebviewProvider {
         tdIdx.textContent = (currentPage - 1) * pageSize + idx + 1;
         tr.appendChild(tdIdx);
 
-        const pkVal = pkField ? row[pkField.name] : idx;
+        const rowKey = rowKeyOf(row);
 
         currentFields.forEach(f => {
           const td = document.createElement('td');
-          td.className = 'editable';
           const val = row[f.name];
           if (val === null || val === undefined) {
-            td.innerHTML = '<i>null</i>';
+            const i = document.createElement('i');
+            i.textContent = 'null';
+            td.appendChild(i);
           } else {
             td.textContent = String(val);
           }
-          td.onclick = () => {
-            const valStr = val === null || val === undefined ? 'null' : String(val);
-            editCell(f.name, pkField ? pkField.name : '', pkVal, valStr);
-          };
+          if (editable) {
+            td.className = 'editable';
+            td.onclick = () => {
+              const valStr = val === null || val === undefined ? 'null' : String(val);
+              editCell(f.name, rowKey, valStr);
+            };
+          } else {
+            td.title = '${text.readOnlyHint}';
+          }
           tr.appendChild(td);
         });
 
         const tdAction = document.createElement('td');
-        const delBtn = document.createElement('button');
-        delBtn.className = 'danger';
-        delBtn.textContent = '🗑️';
-        delBtn.onclick = () => {
-          deleteRow(pkField ? pkField.name : '', pkVal);
-        };
-        tdAction.appendChild(delBtn);
+        if (editable) {
+          const delBtn = document.createElement('button');
+          delBtn.className = 'danger';
+          delBtn.textContent = '🗑️';
+          delBtn.onclick = () => deleteRow(rowKey);
+          tdAction.appendChild(delBtn);
+        }
         tr.appendChild(tdAction);
 
         body.appendChild(tr);
@@ -875,6 +972,7 @@ export class TableWebviewProvider {
 <html lang="${ru ? 'ru' : 'en'}">
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:;">
   <title>${text.title}: ${connectionName}</title>
   <style>
     body {

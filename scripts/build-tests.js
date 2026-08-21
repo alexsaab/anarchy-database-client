@@ -27,5 +27,11 @@ esbuild
     alias: { vscode: path.join(testDir, 'stubs', 'vscode.js') },
     external: ['esbuild', 'pg-native', 'cardinal', 'cpu-features'],
   })
-  .then(() => console.log(`built ${entries.length} test bundle(s) -> out-test/`))
+  .then(() => {
+    // node-sqlite3-wasm resolves its engine from __dirname, which for the test
+    // bundles is out-test/ -- the same arrangement as out/ in production.
+    const wasm = require.resolve('node-sqlite3-wasm/dist/node-sqlite3-wasm.wasm');
+    fs.copyFileSync(wasm, path.join(outDir, 'node-sqlite3-wasm.wasm'));
+    console.log(`built ${entries.length} test bundle(s) -> out-test/`);
+  })
   .catch(() => process.exit(1));

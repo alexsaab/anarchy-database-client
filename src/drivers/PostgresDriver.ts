@@ -230,6 +230,28 @@ export class PostgresDriver extends BaseDriver {
     return this.withReconnect(runQuery);
   }
 
+  public get supportsParameterizedQueries(): boolean {
+    return true;
+  }
+
+  public placeholder(index: number): string {
+    return `$${index}`;
+  }
+
+  public async executeParameterized(sql: string, params: any[]): Promise<QueryResult> {
+    return this.withReconnect(async () => {
+      const client = await this.acquireClient();
+      const startTime = Date.now();
+      const result = await client.query(sql, params);
+      return {
+        rows: result.rows || [],
+        fields: (result.fields || []).map((f: any) => ({ name: f.name, type: String(f.dataTypeID), nullable: true })),
+        affectedRows: result.rowCount || 0,
+        costTimeMs: Date.now() - startTime,
+      };
+    });
+  }
+
   async getTableData(tableName: string, params: PageParams, schemaName: string = 'public'): Promise<QueryResult> {
     const offset = (params.page - 1) * params.pageSize;
     const tableRef = `"${schemaName}"."${tableName}"`;

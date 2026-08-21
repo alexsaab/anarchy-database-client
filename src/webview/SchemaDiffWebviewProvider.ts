@@ -151,6 +151,7 @@ export class SchemaDiffWebviewProvider {
 <html lang="${ru ? 'ru' : 'en'}">
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:;">
   <title>${ru ? 'Сравнение Схем' : 'Schema Diff'}</title>
   <style>
     body {

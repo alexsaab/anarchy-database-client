@@ -312,6 +312,31 @@ export class MysqlDriver extends BaseDriver {
     }
   }
 
+  public get supportsParameterizedQueries(): boolean {
+    return true;
+  }
+
+  public async executeParameterized(sql: string, params: any[]): Promise<QueryResult> {
+    const startTime = Date.now();
+    const [results, fields] = await this.queryWithRetry(sql, params);
+    const costTimeMs = Date.now() - startTime;
+
+    if (Array.isArray(results)) {
+      return {
+        rows: results as any[],
+        fields: (fields || []).map((f: any) => ({ name: f.name, type: String(f.type || 'VARCHAR'), nullable: true })),
+        affectedRows: results.length,
+        costTimeMs,
+      };
+    }
+    return {
+      rows: [],
+      fields: [],
+      affectedRows: (results as any)?.affectedRows || 0,
+      costTimeMs,
+    };
+  }
+
   async getTableData(tableName: string, params: PageParams, schemaName?: string): Promise<QueryResult> {
     const offset = (params.page - 1) * params.pageSize;
     const db = this.config.database || schemaName;

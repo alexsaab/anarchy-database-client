@@ -53,6 +53,11 @@ export class RedisDriver extends BaseDriver {
     }
   }
 
+  /** Not a SQL store: the grid must not generate INSERT/UPDATE/DELETE for it. */
+  public get supportsSqlWrites(): boolean {
+    return false;
+  }
+
   async getDatabases(): Promise<string[]> {
     return Array.from({ length: 16 }, (_, i) => `db${i}`);
   }
