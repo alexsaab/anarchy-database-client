@@ -4,6 +4,7 @@
   "command.reconnectConnection": "Переподключиться",
   "command.addConnection": "Добавить Подключение",
   "command.editConnection": "Редактировать Подключение",
+  "command.cloneConnection": "Клонировать Подключение",
   "command.deleteConnection": "Удалить Подключение",
   "command.refreshTree": "Обновить",
   "command.openTable": "Открыть Данные Таблицы",

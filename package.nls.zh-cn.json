@@ -3,6 +3,7 @@
   "view.databaseExplorer": "Anarchy 数据库资源管理器",
   "command.addConnection": "添加数据库连接",
   "command.editConnection": "编辑数据库连接",
+  "command.cloneConnection": "克隆数据库连接",
   "command.deleteConnection": "删除数据库连接",
   "command.refreshTree": "刷新",
   "command.openTable": "打开表数据",

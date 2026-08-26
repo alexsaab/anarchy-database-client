@@ -91,6 +91,70 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.cloneConnection', async (node?: ConnectionNode) => {
+      let targetId: string | undefined;
+      let targetName: string | undefined;
+
+      if (node && node.config) {
+        targetId = node.config.id;
+        targetName = node.config.name;
+      } else {
+        const connections = storageService.getConnections();
+        if (connections.length === 0) {
+          vscode.window.showInformationMessage(t('No connections to clone.', 'Нет подключений для клонирования.'));
+          return;
+        }
+        const picked = await vscode.window.showQuickPick(
+          connections.map((c) => ({
+            label: c.name,
+            description: `${c.type} (${c.host || c.dbPath || 'local'})`,
+            connectionId: c.id,
+          })),
+          { title: t('Select Connection to Clone', 'Выберите подключение для клонирования') }
+        );
+        if (!picked) {
+          return;
+        }
+        targetId = picked.connectionId;
+        targetName = picked.label;
+      }
+
+      if (!targetId) {
+        return;
+      }
+
+      try {
+        const cloned = await storageService.cloneConnection(targetId);
+        if (cloned) {
+          treeProvider.refresh();
+          const editAction = t('Edit', 'Редактировать');
+          const msg = t(`Cloned connection "${targetName}" as "${cloned.name}".`, `Подключение "${targetName}" скопировано как "${cloned.name}".`);
+          const choice = await vscode.window.showInformationMessage(msg, editAction);
+          if (choice === editAction) {
+            const password = await storageService.getPassword(cloned.id);
+            const sshPassword = await storageService.getSshPassword(cloned.id);
+            ConnectWebviewProvider.show(
+              context,
+              storageService,
+              () => {
+                treeProvider.refresh();
+              },
+              cloned,
+              password,
+              sshPassword
+            );
+          }
+        }
+      } catch (err: any) {
+        vscode.window.showErrorMessage(
+          t(`Failed to clone connection: ${err.message}`, `Не удалось клонировать подключение: ${err.message}`)
+        );
+      }
+    })
+  );
+
+
   const reconnectById = async (connectionId: string): Promise<boolean> => {
     const config = storageService.getConnections().find((c) => c.id === connectionId);
     if (!config) {

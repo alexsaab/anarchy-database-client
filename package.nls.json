@@ -4,6 +4,7 @@
   "command.reconnectConnection": "Reconnect",
   "command.addConnection": "Add Connection",
   "command.editConnection": "Edit Connection",
+  "command.cloneConnection": "Clone Connection",
   "command.deleteConnection": "Delete Connection",
   "command.refreshTree": "Refresh",
   "command.openTable": "Open Table Data",

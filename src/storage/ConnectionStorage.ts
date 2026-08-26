@@ -81,4 +81,54 @@ export class ConnectionStorageService {
     await this.context.secrets.delete(`password_${id}`);
     await this.context.secrets.delete(`ssh_password_${id}`);
   }
+
+  public async cloneConnection(sourceId: string, customName?: string): Promise<SavedConnectionProfile | undefined> {
+    const source = this.getConnectionById(sourceId);
+    if (!source) {
+      return undefined;
+    }
+
+    const connections = this.getConnections();
+    let newName = customName;
+    if (!newName) {
+      const baseName = source.name;
+      const escapedBase = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const copyPattern = new RegExp(`^${escapedBase} \\(Copy(?: (\\d+))?\\)$`);
+      let maxCopyNum = 0;
+      let hasPlainCopy = false;
+
+      for (const conn of connections) {
+        if (conn.name === `${baseName} (Copy)`) {
+          hasPlainCopy = true;
+        } else {
+          const match = conn.name.match(copyPattern);
+          if (match && match[1]) {
+            const num = parseInt(match[1], 10);
+            if (num > maxCopyNum) {
+              maxCopyNum = num;
+            }
+          }
+        }
+      }
+
+      if (!hasPlainCopy && maxCopyNum === 0) {
+        newName = `${baseName} (Copy)`;
+      } else {
+        newName = `${baseName} (Copy ${Math.max(maxCopyNum + 1, 2)})`;
+      }
+    }
+
+    const newId = `conn_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const clonedConfig: ConnectionConfig = {
+      ...JSON.parse(JSON.stringify(source)),
+      id: newId,
+      name: newName,
+    };
+
+    const password = await this.getPassword(source.id);
+    const sshPassword = await this.getSshPassword(source.id);
+
+    return await this.saveConnection(clonedConfig, password, sshPassword);
+  }
 }
+

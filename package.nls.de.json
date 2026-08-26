@@ -3,6 +3,7 @@
   "view.databaseExplorer": "Anarchy DB-Explorer",
   "command.addConnection": "Verbindung hinzufügen",
   "command.editConnection": "Verbindung bearbeiten",
+  "command.cloneConnection": "Verbindung duplizieren",
   "command.deleteConnection": "Verbindung löschen",
   "command.refreshTree": "Aktualisieren",
   "command.openTable": "Tabellendaten öffnen",
