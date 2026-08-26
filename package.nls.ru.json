@@ -31,6 +31,7 @@
   "command.openRedisEditor": "Redis Менеджер Ключей",
   "command.compareData": "Сравнение и Синхронизация Данных",
   "command.aiAssistant": "ИИ SQL-Помощник",
+  "command.goToTable": "Перейти к таблице",
   "command.generateMermaid": "Создать ER-диаграмму Mermaid",
   "command.runQueryFile": "Выполнить SQL-скрипт",
   "command.queryHistory": "История запросов",

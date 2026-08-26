@@ -184,9 +184,9 @@
         "icon": "$(sync)"
       },
       {
-        "command": "dbClient.aiAssistant",
-        "title": "%command.aiAssistant%",
-        "icon": "$(wand)"
+        "command": "dbClient.goToTable",
+        "title": "%command.goToTable%",
+        "icon": "$(search)"
       },
       {
         "command": "dbClient.generateMermaid",
@@ -342,6 +342,11 @@
           "command": "dbClient.compareData",
           "when": "view == database-client-explorer && viewItem == tableNode",
           "group": "1_table@2"
+        },
+        {
+          "command": "dbClient.goToTable",
+          "when": "view == database-client-explorer && viewItem == tableNode",
+          "group": "1_table@3"
         },
         {
           "command": "dbClient.reconnectConnection",

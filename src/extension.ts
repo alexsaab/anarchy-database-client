@@ -34,6 +34,7 @@ import { MermaidService } from './diagram/MermaidService.js';
 import { ImportService } from './import/ImportService.js';
 import { SqlScriptRunner } from './script/SqlScriptRunner.js';
 import { SchemaNode } from './tree/SchemaNode.js';
+import { TableInfo } from './model/QueryTypes.js';
 import { IconHelper } from './util/IconHelper.js';
 import { t } from './util/i18n.js';
 
@@ -227,6 +228,92 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('dbClient.refresh', () => {
       treeProvider.refresh();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.goToTable', async () => {
+      const connections = storageService.getConnections();
+      if (connections.length === 0) {
+        vscode.window.showInformationMessage(t('No connections configured.', 'Нет настроенных подключений.'));
+        return;
+      }
+
+      const items: vscode.QuickPickItem[] = [];
+
+      for (const profile of connections) {
+        try {
+          const pass = await storageService.getPassword(profile.id);
+          const sshPass = await storageService.getSshPassword(profile.id);
+          const driver = await DriverManager.getInstance().getDriver(profile, pass, sshPass);
+
+          let databases: string[];
+          try {
+            databases = await driver.getDatabases();
+          } catch {
+            databases = [];
+          }
+          if (databases.length === 0) {
+            databases = [profile.database || 'default'];
+          }
+
+          for (const db of databases) {
+            try {
+              const schemaName = profile.schema || 'public';
+              const getTablesPromise = profile.type === 'Elasticsearch' || profile.type === 'Redis'
+                ? driver.getTables()
+                : driver.getTables(db, schemaName);
+
+              const tables = await getTablesPromise;
+              for (const tbl of tables) {
+                const connLabel = profile.name;
+                const desc = `${tbl.type === 'view' ? 'View' : 'Table'} · ${db}${schemaName !== 'public' ? ` / ${schemaName}` : ''}`;
+                (items as any[]).push({
+                  label: tbl.name,
+                  description: desc,
+                  detail: `${connLabel} › ${desc}`,
+                  pick: tbl,
+                  connId: profile.id,
+                  db: db,
+                });
+              }
+            } catch (err: any) {
+              vscode.window.showWarningMessage(`Failed to list tables in ${db}: ${err.message}`);
+            }
+          }
+        } catch (err: any) {
+          vscode.window.showWarningMessage(`Failed to connect to ${profile.name}: ${err.message}`);
+        }
+      }
+
+      if (items.length === 0) {
+        vscode.window.showInformationMessage(t('No tables found.', 'Таблицы не найдены.'));
+        return;
+      }
+
+      const picked = await vscode.window.showQuickPick(items, {
+        placeHolder: t('Type table name to jump to it…', 'Введите название таблицы для быстрого перехода…'),
+        matchOnDescription: true,
+        matchOnDetail: true,
+      });
+
+      if (!picked) return;
+
+      const tbl = (picked as any).pick as TableInfo | undefined;
+      if (!tbl) return;
+
+      // find the connection that owns this table
+      const foundItem = (items as any[]).find((it) => it.pick === tbl);
+      if (!foundItem) return;
+
+      const targetConn = connections.find((c) => c.id === foundItem.connId);
+      if (!targetConn) return;
+
+      const password = await storageService.getPassword(targetConn.id);
+      const sshPassword = await storageService.getSshPassword(targetConn.id);
+      const tableNode = new TableNode(tbl, targetConn, password, sshPassword);
+
+      await vscode.commands.executeCommand('dbClient.openTable', tableNode);
     })
   );
 
