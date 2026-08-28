@@ -304,17 +304,29 @@ export class ElasticsearchDriver extends BaseDriver {
       await this.connect();
     }
     try {
-      const mapping = ElasticsearchDriver.unwrap(await this.client.indices.getMapping({ index: indexName }));
+      const rawMapping = await this.client.indices.getMapping({ index: indexName });
+      const mapping = ElasticsearchDriver.unwrap(rawMapping);
       const key = mapping && mapping[indexName] ? indexName : Object.keys(mapping || {})[0];
       const properties = (mapping as any)?.[key]?.mappings?.properties || {};
-      return Object.keys(properties).map((prop) => ({
-        name: prop,
-        type: properties[prop].type || 'object',
-        nullable: true,
-        isPrimaryKey: prop === '_id',
-      }));
+      const cols: ColumnInfo[] = [
+        { name: '_id', type: 'keyword', nullable: false, isPrimaryKey: true },
+        { name: '_score', type: 'float', nullable: true },
+      ];
+      for (const prop of Object.keys(properties)) {
+        if (prop !== '_id' && prop !== '_score') {
+          cols.push({
+            name: prop,
+            type: properties[prop].type || 'object',
+            nullable: true,
+          });
+        }
+      }
+      return cols;
     } catch (e) {
-      return [{ name: '_id', type: 'keyword', nullable: false, isPrimaryKey: true }];
+      return [
+        { name: '_id', type: 'keyword', nullable: false, isPrimaryKey: true },
+        { name: '_score', type: 'float', nullable: true },
+      ];
     }
   }
 
@@ -323,27 +335,49 @@ export class ElasticsearchDriver extends BaseDriver {
       await this.connect();
     }
     const startTime = Date.now();
-    const body = queryJson.trim() ? JSON.parse(queryJson) : { query: { match_all: {} } };
+    let body: any;
+    try {
+      body = queryJson.trim() ? JSON.parse(queryJson) : { query: { match_all: {} } };
+    } catch (e: any) {
+      throw new Error(`Invalid JSON query: ${e.message}`);
+    }
 
-    const searchRes = await this.client.search({
-      index: this.config.database || '_all',
+    const rawRes = await this.client.search({
+      index: this.config.database && this.config.database !== 'cluster' ? this.config.database : '_all',
       body,
     });
+    const searchRes = ElasticsearchDriver.unwrap(rawRes);
     const costTimeMs = Date.now() - startTime;
 
-    const hits = searchRes.hits.hits.map((h: any) => ({
+    const rawHits = searchRes?.hits?.hits ?? searchRes?.body?.hits?.hits ?? [];
+    const hits = rawHits.map((h: any) => ({
       _id: h._id,
       _index: h._index,
-      ...h._source,
+      ...(h._source && typeof h._source === 'object' ? h._source : (h.fields ? h.fields : {})),
     }));
 
-    const fields: ColumnInfo[] =
-      hits.length > 0 ? Object.keys(hits[0]).map((k) => ({ name: k, type: 'unknown', nullable: true })) : [];
+    const fieldSet = new Set<string>();
+    for (const h of hits) {
+      for (const k of Object.keys(h)) {
+        fieldSet.add(k);
+      }
+    }
+
+    const fields: ColumnInfo[] = Array.from(fieldSet).map((k) => ({
+      name: k,
+      type: hits[0] && hits[0][k] !== undefined ? typeof hits[0][k] : 'unknown',
+      nullable: true,
+      isPrimaryKey: k === '_id',
+    }));
+
+    const rawTotal = searchRes?.hits?.total ?? searchRes?.body?.hits?.total;
+    const totalCount =
+      typeof rawTotal === 'number' ? rawTotal : (rawTotal?.value ?? hits.length);
 
     return {
       rows: hits,
       fields,
-      totalCount: typeof searchRes.hits.total === 'number' ? searchRes.hits.total : (searchRes.hits.total as any)?.value || 0,
+      totalCount,
       costTimeMs,
     };
   }
@@ -360,7 +394,7 @@ export class ElasticsearchDriver extends BaseDriver {
 
     let searchRes: any;
     try {
-      searchRes = await this.client.search({
+      const rawRes = await this.client.search({
         index: indexName,
         from,
         size: params.pageSize,
@@ -368,6 +402,7 @@ export class ElasticsearchDriver extends BaseDriver {
         // Without this the count saturates at 10000 and the grid loses the tail pages.
         track_total_hits: true,
       });
+      searchRes = ElasticsearchDriver.unwrap(rawRes);
     } catch (err: any) {
       const raw = String(err?.message || err);
       if (/Result window is too large|max_result_window/i.test(raw)) {
@@ -382,17 +417,41 @@ export class ElasticsearchDriver extends BaseDriver {
     }
     const costTimeMs = Date.now() - startTime;
 
-    const hits = searchRes.hits.hits.map((h: any) => ({
+    const rawHits = searchRes?.hits?.hits ?? searchRes?.body?.hits?.hits ?? [];
+    const hits = rawHits.map((h: any) => ({
       _id: h._id,
       _score: h._score,
-      ...h._source,
+      ...(h._source && typeof h._source === 'object' ? h._source : (h.fields ? h.fields : {})),
     }));
 
-    const fields: ColumnInfo[] =
-      hits.length > 0 ? Object.keys(hits[0]).map((k) => ({ name: k, type: typeof hits[0][k], nullable: true })) : [];
+    const fieldSet = new Set<string>();
+    for (const h of hits) {
+      for (const k of Object.keys(h)) {
+        fieldSet.add(k);
+      }
+    }
 
+    let fields: ColumnInfo[] = Array.from(fieldSet).map((k) => ({
+      name: k,
+      type: hits[0] && hits[0][k] !== undefined ? typeof hits[0][k] : 'string',
+      nullable: true,
+      isPrimaryKey: k === '_id',
+    }));
+
+    if (fields.length === 0) {
+      try {
+        fields = await this.getColumns(indexName);
+      } catch (e) {
+        fields = [
+          { name: '_id', type: 'keyword', nullable: false, isPrimaryKey: true },
+          { name: '_score', type: 'float', nullable: true },
+        ];
+      }
+    }
+
+    const rawTotal = searchRes?.hits?.total ?? searchRes?.body?.hits?.total;
     const totalCount =
-      typeof searchRes.hits.total === 'number' ? searchRes.hits.total : (searchRes.hits.total as any)?.value || 0;
+      typeof rawTotal === 'number' ? rawTotal : (rawTotal?.value ?? hits.length);
 
     return {
       rows: hits,

@@ -223,7 +223,27 @@ describe('MySQL (live)', () => {
       const res = await d.getTableData('t_search', { page: 1, pageSize: 50, searchTerm: 'needle' });
       assert.equal(res.totalCount, 1);
       assert.equal(res.rows[0].id, 118);
+      assert.ok(res.fields.length > 0, 'fields should be populated');
       await d.executeQuery('DROP TABLE t_search');
+    } finally {
+      await d.disconnect();
+    }
+  });
+
+  test('getTableData reads records and columns correctly with explicit database', async (t: any) => {
+    if (!(await requireMy(t))) return;
+    const noDbConfig = { ...MY, database: undefined };
+    const d = new MysqlDriver(noDbConfig, 'testpw');
+    await d.connect();
+    try {
+      await d.executeQuery(`CREATE DATABASE IF NOT EXISTS \`${MY.database}\``);
+      await d.executeQuery(`CREATE TABLE IF NOT EXISTS \`${MY.database}\`.\`t_records\` (id int primary key, val varchar(50))`);
+      await d.executeParameterized(`INSERT INTO \`${MY.database}\`.\`t_records\` VALUES (?, ?) ON DUPLICATE KEY UPDATE val = VALUES(val)`, [1, 'hello mysql']);
+      const res = await d.getTableData('t_records', { page: 1, pageSize: 10 }, MY.database);
+      assert.ok(res.rows.length >= 1, 'should return at least one row');
+      assert.equal(res.rows[0].val, 'hello mysql');
+      assert.ok(res.fields.some((f) => f.name === 'id' && f.isPrimaryKey));
+      await d.executeQuery(`DROP TABLE \`${MY.database}\`.\`t_records\``);
     } finally {
       await d.disconnect();
     }

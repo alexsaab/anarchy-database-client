@@ -26,8 +26,9 @@ export function formatTableRef(dbType: string, tableName: string, schemaName?: s
     return `${quoteId(dbType, schemaName || 'dbo')}.${quoteId(dbType, tableName)}`;
   }
   if (dbType === 'MySQL') {
-    return databaseName
-      ? `${quoteId(dbType, databaseName)}.${quoteId(dbType, tableName)}`
+    const db = databaseName || (schemaName && schemaName !== 'public' ? schemaName : undefined);
+    return db
+      ? `${quoteId(dbType, db)}.${quoteId(dbType, tableName)}`
       : quoteId(dbType, tableName);
   }
   if (dbType === 'SQLite') {

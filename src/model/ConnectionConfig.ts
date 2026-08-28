@@ -26,6 +26,8 @@ export interface ConnectionConfig {
   schema?: string;
   dbPath?: string; // For SQLite
   ssl?: boolean;
+  safeMode?: boolean;
+  readOnly?: boolean;
   ssh?: {
     enabled: boolean;
     host?: string;

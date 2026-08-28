@@ -17,6 +17,54 @@ module.exports = {
     constructor(value) { this.value = value || ''; }
     appendMarkdown(v) { this.value += v; return this; }
   },
+  SnippetString: class {
+    constructor(value) { this.value = value || ''; }
+  },
+  Position: class {
+    constructor(line, character) { this.line = line; this.character = character; }
+  },
+  Range: class {
+    constructor(start, end) { this.start = start; this.end = end; }
+  },
+  Hover: class {
+    constructor(contents, range) { this.contents = contents; this.range = range; }
+  },
+  CompletionItem: class {
+    constructor(label, kind) {
+      this.label = label;
+      this.kind = kind;
+      this.detail = '';
+      this.documentation = '';
+      this.insertText = undefined;
+    }
+  },
+  CompletionItemKind: {
+    Text: 0,
+    Method: 1,
+    Function: 2,
+    Constructor: 3,
+    Field: 4,
+    Variable: 5,
+    Class: 6,
+    Interface: 7,
+    Module: 8,
+    Property: 9,
+    Unit: 10,
+    Value: 11,
+    Enum: 12,
+    Keyword: 13,
+    Snippet: 14,
+    Color: 15,
+    File: 16,
+    Reference: 17,
+    Folder: 18,
+    EnumMember: 19,
+    Constant: 20,
+    Struct: 21,
+    Event: 22,
+    Operator: 23,
+    TypeParameter: 24,
+  },
   TreeItem: class { constructor(label, state) { this.label = label; this.collapsibleState = state; } },
   TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
   ViewColumn: { One: 1, Two: 2 },
@@ -24,6 +72,10 @@ module.exports = {
   Uri: { file: (p) => ({ fsPath: p, path: p, scheme: 'file' }) },
   QuickPickItemKind: { Separator: -1, Default: 0 },
   env: { language: 'en', clipboard: { writeText: async () => {} } },
+  languages: {
+    registerCompletionItemProvider: () => ({ dispose() {} }),
+    registerHoverProvider: () => ({ dispose() {} }),
+  },
   commands: { registerCommand: () => ({ dispose() {} }), executeCommand: async () => {} },
   workspace: { openTextDocument: async (o) => o, getConfiguration: () => ({ get: () => undefined }) },
   window: {

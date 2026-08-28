@@ -9,6 +9,7 @@ import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { PageParams, QueryResult } from '../model/QueryTypes.js';
 import { ExportService } from '../export/ExportService.js';
 import { QueryHistoryStorage } from '../storage/QueryHistoryStorage.js';
+import { DestructiveQueryGuard } from '../sql/DestructiveQueryGuard.js';
 import { isRussian, t } from '../util/i18n.js';
 
 export class TableWebviewProvider {
@@ -28,17 +29,16 @@ export class TableWebviewProvider {
   public static openTable(tableNode: TableNode) {
     const connectionConfig = tableNode.connectionConfig;
     const tableName = tableNode.table.name;
-    const schemaName = tableNode.table.schema || 'public';
+    const schemaName = tableNode.table.schema || (connectionConfig.type === 'PostgreSQL' ? 'public' : (connectionConfig.database || ''));
     const password = tableNode.password;
     const sshPassword = tableNode.sshPassword;
     const panelKey = `${connectionConfig.id}_${connectionConfig.database || ''}_${schemaName}_${tableName}`;
 
     const existingPanel = TableWebviewProvider.activePanels.get(panelKey);
     if (existingPanel) {
-      try {
-        existingPanel.dispose();
-      } catch (e) {}
-      TableWebviewProvider.activePanels.delete(panelKey);
+      existingPanel.reveal(vscode.ViewColumn.One);
+      existingPanel.webview.postMessage({ type: 'refresh' });
+      return;
     }
 
     const title = t(`Data: ${tableName}`, `Данные: ${tableName}`);
@@ -52,10 +52,10 @@ export class TableWebviewProvider {
       }
     );
 
+    let isDisposed = false;
     TableWebviewProvider.activePanels.set(panelKey, panel);
     panel.onDidDispose(() => {
-      // Only clear the map entry if it still points at this panel: disposing an
-      // old panel fires after a replacement has already been registered.
+      isDisposed = true;
       if (TableWebviewProvider.activePanels.get(panelKey) === panel) {
         TableWebviewProvider.activePanels.delete(panelKey);
       }
@@ -69,18 +69,14 @@ export class TableWebviewProvider {
     let lastResult: QueryResult | null = null;
 
     const loadData = async () => {
+      if (isDisposed) return;
       try {
         const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
         const result = await driver.getTableData(tableName, currentParams, schemaName);
-        
-        let fields = result.fields || [];
-        if (fields.length === 0 && (result.rows || []).length > 0) {
-          fields = Object.keys(result.rows[0]).map((k) => ({
-            name: k,
-            type: 'VARCHAR',
-            nullable: true,
-          }));
-        }
+        if (isDisposed) return;
+
+        let fields = result.fields ? [...result.fields] : [];
+        const existingFieldNames = new Set(fields.map((f) => f.name.toLowerCase()));
 
         // Sanitize rows for postMessage (handling BigInt, Date, Buffer, objects, etc.)
         const sanitizedRows = (result.rows || []).map((row: any) => {
@@ -107,36 +103,73 @@ export class TableWebviewProvider {
           return sanitized;
         });
 
+        // Ensure all row keys are represented in fields for document stores
+        if (sanitizedRows.length > 0) {
+          for (const r of sanitizedRows) {
+            for (const k of Object.keys(r)) {
+              if (!existingFieldNames.has(k.toLowerCase())) {
+                existingFieldNames.add(k.toLowerCase());
+                fields.push({
+                  name: k,
+                  type: 'VARCHAR',
+                  nullable: true,
+                  isPrimaryKey: k === '_id' || k === 'id',
+                });
+              }
+            }
+          }
+        }
+
+        if (fields.length === 0) {
+          try {
+            const schemaCols = await driver.getColumns(tableName, connectionConfig.database, schemaName);
+            if (schemaCols && schemaCols.length > 0) {
+              fields = schemaCols;
+            }
+          } catch (e) {}
+        }
+
         const safeResult: QueryResult = {
           ...result,
           fields,
           rows: sanitizedRows,
+          totalCount: typeof result.totalCount === 'number' ? result.totalCount : sanitizedRows.length,
         };
 
         lastResult = safeResult;
-        panel.webview.postMessage({
-          type: 'renderData',
-          tableName,
-          result: safeResult,
-          params: currentParams,
-        });
+        // Use fire-and-forget postMessage (no await) — the original working
+        // code did not await this call. Awaiting can silently fail when the
+        // webview iframe hasn't fully loaded its script listener yet.
+        if (!isDisposed) {
+          panel.webview.postMessage({
+            type: 'renderData',
+            tableName,
+            result: safeResult,
+            params: currentParams,
+          });
+        }
       } catch (err: any) {
+        if (isDisposed) return;
+        const errMsg = String(err?.message || err || 'Unknown error');
+        if (errMsg.includes('Webview is disposed') || errMsg.includes('disposed')) {
+          return;
+        }
         const connectionLost = ConnectionState.isConnectionError(err);
         if (connectionLost) {
-          // The connection-lost notification is raised centrally by
-          // ConnectionState; the grid just offers the inline retry.
-          ConnectionState.getInstance().markLost(connectionConfig.id, err.message);
+          ConnectionState.getInstance().markLost(connectionConfig.id, errMsg);
         } else {
-          vscode.window.showErrorMessage(`Failed to load data for ${tableName}: ${err.message}`);
+          vscode.window.showErrorMessage(`Failed to load data for ${tableName}: ${errMsg}`);
         }
-        panel.webview.postMessage({
-          type: 'error',
-          message: connectionLost
-            ? t(`Connection to "${connectionConfig.name}" was lost: ${err.message}`,
-                `Соединение с "${connectionConfig.name}" потеряно: ${err.message}`)
-            : err.message,
-          connectionLost,
-        });
+        if (!isDisposed) {
+          panel.webview.postMessage({
+            type: 'error',
+            message: connectionLost
+              ? t(`Connection to "${connectionConfig.name}" was lost: ${errMsg}`,
+                  `Соединение с "${connectionConfig.name}" потеряно: ${errMsg}`)
+              : errMsg,
+            connectionLost,
+          });
+        }
       }
     };
 
@@ -196,6 +229,31 @@ export class TableWebviewProvider {
         case 'deleteRow':
         case 'insertRow':
           try {
+            if (connectionConfig.readOnly) {
+              vscode.window.showErrorMessage(
+                t(
+                  `Connection "${connectionConfig.name}" is in Read-Only mode. Write operations are blocked.`,
+                  `Подключение "${connectionConfig.name}" находится в режиме только для чтения. Запись заблокирована.`
+                )
+              );
+              break;
+            }
+
+            if (msg.type === 'deleteRow' && DestructiveQueryGuard.isProduction(connectionConfig)) {
+              const deleteAction = t('Delete on Production', 'Удалить на Production');
+              const confirm = await vscode.window.showWarningMessage(
+                t(
+                  `⚠️ Production Guard: Are you sure you want to delete this row in "${tableName}" on "${connectionConfig.name}"?`,
+                  `⚠️ Защита Production: Вы уверены, что хотите удалить эту строку в "${tableName}" на "${connectionConfig.name}"?`
+                ),
+                { modal: true },
+                deleteAction
+              );
+              if (confirm !== deleteAction) {
+                break;
+              }
+            }
+
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
 
             if (!driver.supportsRowWrites) {
@@ -326,29 +384,81 @@ export class TableWebviewProvider {
       }
     );
 
+    let isDisposed = false;
+    panel.onDidDispose(() => {
+      isDisposed = true;
+    });
+
     let lastResult: QueryResult | null = null;
     let runningQuery: { driver: BaseDriver; queryId: number } | null = null;
 
     panel.webview.onDidReceiveMessage(async (msg) => {
+      if (isDisposed) return;
       switch (msg.type) {
         case 'executeSql':
           try {
+            const check = DestructiveQueryGuard.checkQuery(msg.sql, connectionConfig);
+            if (check.isReadOnlyViolation) {
+              if (!isDisposed) {
+                panel.webview.postMessage({
+                  type: 'error',
+                  message: t('Write operations are forbidden on Read-Only connections.', 'Операции записи запрещены на подключениях только для чтения.'),
+                });
+              }
+              break;
+            }
+
+            if (check.isDestructive && DestructiveQueryGuard.isProduction(connectionConfig)) {
+              const proceed = t('Execute Anyway', 'Всё равно выполнить');
+              const confirm = await vscode.window.showWarningMessage(
+                t(
+                  `⚠️ Production Guard: ${check.reason} on "${connectionConfig.name}". Are you sure you want to execute?`,
+                  `⚠️ Защита Production: ${check.reason} на "${connectionConfig.name}". Вы уверены, что хотите выполнить?`
+                ),
+                { modal: true },
+                proceed
+              );
+              if (confirm !== proceed) {
+                if (!isDisposed) {
+                  panel.webview.postMessage({
+                    type: 'error',
+                    message: t('Execution cancelled by user.', 'Выполнение отменено пользователем.'),
+                  });
+                }
+                break;
+              }
+            }
+
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
+            if (isDisposed) break;
             // Track the statement so the Cancel button can stop it server-side.
             const queryId = driver.beginQueryId();
             runningQuery = { driver, queryId };
-            panel.webview.postMessage({ type: 'queryStarted', cancellable: driver.supportsCancellation });
+            if (!isDisposed) {
+              panel.webview.postMessage({ type: 'queryStarted', cancellable: driver.supportsCancellation });
+            }
             try {
               const res = await driver.executeQuery(msg.sql, queryId);
+              if (isDisposed) break;
               lastResult = res;
               await QueryHistoryStorage.record(msg.sql, connectionConfig.name, res.costTimeMs);
-              panel.webview.postMessage({ type: 'queryResult', result: res });
+              if (!isDisposed) {
+                panel.webview.postMessage({ type: 'queryResult', result: res });
+              }
             } finally {
               runningQuery = null;
-              panel.webview.postMessage({ type: 'queryFinished' });
+              if (!isDisposed) {
+                try {
+                  panel.webview.postMessage({ type: 'queryFinished' });
+                } catch (e) {}
+              }
             }
           } catch (err: any) {
-            panel.webview.postMessage({ type: 'error', message: err.message });
+            if (!isDisposed) {
+              try {
+                panel.webview.postMessage({ type: 'error', message: err.message });
+              } catch (e) {}
+            }
           }
           break;
         case 'cancelQuery':
@@ -408,6 +518,9 @@ export class TableWebviewProvider {
       readOnlyHint: ru
         ? 'Нет первичного ключа — редактирование недоступно'
         : 'No primary key — editing is disabled for this table',
+      chartView: ru ? '📊 График' : '📊 Chart',
+      gridView: ru ? '📋 Таблица' : '📋 Table',
+      copyAs: ru ? '📋 Скопировать как...' : '📋 Copy As...',
     };
 
     return `<!DOCTYPE html>
@@ -611,6 +724,16 @@ export class TableWebviewProvider {
     <button class="secondary" onclick="exportData('sql')">SQL</button>
     <button class="secondary" onclick="exportData('xlsx')">Excel</button>
 
+    <select id="copyAsSelect" onchange="if (this.value) { copyAs(this.value); this.value = ''; }">
+      <option value="">${text.copyAs}</option>
+      <option value="markdown">Markdown Table</option>
+      <option value="sql">SQL INSERT</option>
+      <option value="json">JSON Array</option>
+      <option value="ts">TypeScript Interface</option>
+    </select>
+
+    <button id="toggleViewBtn" class="secondary" onclick="toggleChartView()">${text.chartView}</button>
+
     <div class="info" id="stats">Rows: 0 | Time: 0ms</div>
   </div>
 
@@ -622,6 +745,24 @@ export class TableWebviewProvider {
       <tbody id="tableBody"></tbody>
     </table>
   </div>
+
+  <div id="chartContainer" style="display: none; flex: 1; overflow: auto; border: 1px solid var(--vscode-panel-border, #333); border-radius: 4px; padding: 15px; background: var(--vscode-sideBar-background);">
+    <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 15px; flex-wrap: wrap;">
+      <label><b>X-Axis:</b></label>
+      <select id="chartXAxis" onchange="renderChart()"></select>
+      <label><b>Y-Axis:</b></label>
+      <select id="chartYAxis" onchange="renderChart()"></select>
+      <label><b>Type:</b></label>
+      <select id="chartType" onchange="renderChart()">
+        <option value="bar">Bar Chart</option>
+        <option value="line">Line Chart</option>
+        <option value="pie">Pie Chart</option>
+      </select>
+    </div>
+    <div id="chartCanvas" style="width: 100%; min-height: 350px; display: flex; align-items: center; justify-content: center;"></div>
+  </div>
+
+  <div id="summaryBar" style="padding: 6px 12px; font-size: 12px; background: var(--vscode-sideBar-background); border: 1px solid var(--vscode-panel-border, #333); border-radius: 4px; margin-top: 6px; display: flex; gap: 16px; flex-wrap: wrap;"></div>
 
   <!-- HTML Modal -->
   <div id="modalOverlay">
@@ -642,9 +783,11 @@ export class TableWebviewProvider {
     let pageSize = ${initialPageSize};
     let currentFields = [];
     let allRows = [];
-
     let currentSortField = null;
     let currentSortOrder = null;
+    let currentSearch = '';
+    let searchTimer = null;
+    let isChartView = false;
 
     function toggleSort(fieldName) {
       if (currentSortField === fieldName) {
@@ -719,8 +862,6 @@ export class TableWebviewProvider {
 
     // The search runs on the server, so matches on other pages are found too.
     // Typing is debounced to avoid a query per keystroke.
-    let searchTimer = null;
-    let currentSearch = '';
     document.getElementById('quickSearchInput').oninput = (e) => {
       const term = e.target.value;
       if (searchTimer) clearTimeout(searchTimer);
@@ -919,6 +1060,19 @@ export class TableWebviewProvider {
       const body = document.getElementById('tableBody');
       body.textContent = '';
 
+      if (!rows || rows.length === 0) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = Math.max(1, currentFields.length + 2);
+        td.style.textAlign = 'center';
+        td.style.padding = '30px';
+        td.style.opacity = '0.7';
+        td.textContent = '${ru ? "Таблица пуста (0 строк)" : "No records found (0 rows)"}';
+        tr.appendChild(td);
+        body.appendChild(tr);
+        return;
+      }
+
       rows.forEach((row, idx) => {
         const tr = document.createElement('tr');
 
@@ -930,18 +1084,23 @@ export class TableWebviewProvider {
 
         currentFields.forEach(f => {
           const td = document.createElement('td');
-          const val = row[f.name];
+          let val = row[f.name];
+          if (val === undefined && f.name) {
+            const matchKey = Object.keys(row).find(k => k.toLowerCase() === f.name.toLowerCase());
+            if (matchKey) val = row[matchKey];
+          }
+
           if (val === null || val === undefined) {
             const i = document.createElement('i');
             i.textContent = 'null';
             td.appendChild(i);
           } else {
-            td.textContent = String(val);
+            td.textContent = typeof val === 'object' ? JSON.stringify(val) : String(val);
           }
           if (editable) {
             td.className = 'editable';
             td.onclick = () => {
-              const valStr = val === null || val === undefined ? 'null' : String(val);
+              const valStr = val === null || val === undefined ? 'null' : (typeof val === 'object' ? JSON.stringify(val) : String(val));
               editCell(f.name, rowKey, valStr);
             };
           } else {
@@ -967,6 +1126,18 @@ export class TableWebviewProvider {
     window.addEventListener('message', event => {
       const msg = event.data;
       const errorBox = document.getElementById('errorBox');
+
+      if (msg.type === 'refresh') {
+        vscode.postMessage({
+          type: 'fetchData',
+          params: {
+            page: currentPage,
+            sortField: currentSortField || undefined,
+            sortOrder: currentSortOrder || undefined,
+          }
+        });
+        return;
+      }
 
       if (msg.type === 'error') {
         errorBox.style.display = 'flex';
@@ -998,8 +1169,11 @@ export class TableWebviewProvider {
           pageSize = msg.params.pageSize;
           document.getElementById('pageSizeSelect').value = String(pageSize);
         }
-        currentFields = res.fields;
+        currentFields = (res.fields && res.fields.length > 0) ? res.fields : [];
         allRows = res.rows || [];
+        if (currentFields.length === 0 && allRows.length > 0) {
+          currentFields = Object.keys(allRows[0]).map(k => ({ name: k, type: 'VARCHAR', nullable: true }));
+        }
 
         if (msg.params) {
           currentSortField = msg.params.sortField || null;
@@ -1017,7 +1191,7 @@ export class TableWebviewProvider {
         headTr.appendChild(thNum);
 
         const sortTitlePrefix = '${ru ? 'Нажмите для сортировки по полю' : 'Click to sort by'}';
-        res.fields.forEach(f => {
+        currentFields.forEach(f => {
           const th = document.createElement('th');
           th.className = 'sortable';
           let sortIcon = '⬍';
@@ -1025,8 +1199,12 @@ export class TableWebviewProvider {
             th.classList.add('sorted');
             sortIcon = currentSortOrder === 'ASC' ? '▲' : '▼';
           }
-          th.title = sortTitlePrefix + ' ' + f.name;
-          th.innerHTML = f.name + ' <span class="sort-icon">' + sortIcon + '</span>';
+          th.title = (f.type ? f.type + ' — ' : '') + sortTitlePrefix + ' ' + f.name;
+          th.textContent = f.name + (f.isPrimaryKey ? ' 🔑' : '') + ' ';
+          const iconSpan = document.createElement('span');
+          iconSpan.className = 'sort-icon';
+          iconSpan.textContent = sortIcon;
+          th.appendChild(iconSpan);
           th.onclick = () => toggleSort(f.name);
           headTr.appendChild(th);
         });
@@ -1036,8 +1214,263 @@ export class TableWebviewProvider {
         headTr.appendChild(thAction);
 
         renderRows(allRows);
+        updateSummaryBar(allRows);
+        if (isChartView) {
+          populateChartSelects();
+          renderChart();
+        }
       }
     });
+
+    function toggleChartView() {
+      isChartView = !isChartView;
+      const tableContainer = document.querySelector('.table-container');
+      const chartContainer = document.getElementById('chartContainer');
+      const toggleBtn = document.getElementById('toggleViewBtn');
+
+      if (isChartView) {
+        tableContainer.style.display = 'none';
+        chartContainer.style.display = 'block';
+        toggleBtn.textContent = '${text.gridView}';
+        populateChartSelects();
+        renderChart();
+      } else {
+        tableContainer.style.display = 'block';
+        chartContainer.style.display = 'none';
+        toggleBtn.textContent = '${text.chartView}';
+      }
+    }
+
+    function populateChartSelects() {
+      const xSel = document.getElementById('chartXAxis');
+      const ySel = document.getElementById('chartYAxis');
+      if (!xSel || !ySel) return;
+      const curX = xSel.value;
+      const curY = ySel.value;
+      xSel.textContent = '';
+      ySel.textContent = '';
+
+      currentFields.forEach(f => {
+        const optX = document.createElement('option');
+        optX.value = f.name;
+        optX.textContent = f.name;
+        xSel.appendChild(optX);
+
+        const optY = document.createElement('option');
+        optY.value = f.name;
+        optY.textContent = f.name;
+        ySel.appendChild(optY);
+      });
+
+      if (curX && currentFields.some(f => f.name === curX)) {
+        xSel.value = curX;
+      }
+      if (curY && currentFields.some(f => f.name === curY)) {
+        ySel.value = curY;
+      } else {
+        const numericCol = currentFields.find(f => {
+          const t = (f.type || '').toLowerCase();
+          return t.includes('int') || t.includes('float') || t.includes('decimal') || t.includes('numeric') || t.includes('double') || t.includes('real');
+        });
+        if (numericCol) {
+          ySel.value = numericCol.name;
+        }
+      }
+    }
+
+    function renderChart() {
+      if (!isChartView) return;
+      const canvas = document.getElementById('chartCanvas');
+      if (!canvas) return;
+      canvas.textContent = '';
+      if (!allRows || allRows.length === 0) {
+        canvas.textContent = 'No data available to chart.';
+        return;
+      }
+
+      const xCol = document.getElementById('chartXAxis').value;
+      const yCol = document.getElementById('chartYAxis').value;
+      const type = document.getElementById('chartType').value;
+
+      if (!xCol || !yCol) return;
+
+      const data = allRows.slice(0, 50).map(r => ({
+        label: String(r[xCol] !== null && r[xCol] !== undefined ? r[xCol] : ''),
+        value: Number(r[yCol]) || 0
+      }));
+
+      const maxVal = Math.max(...data.map(d => d.value), 1);
+      const minVal = Math.min(...data.map(d => d.value), 0);
+      const range = maxVal - minVal || 1;
+
+      const svgNS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(svgNS, 'svg');
+      svg.setAttribute('width', '100%');
+      svg.setAttribute('height', '380');
+      svg.setAttribute('viewBox', '0 0 800 380');
+      svg.style.overflow = 'visible';
+
+      const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899'];
+
+      if (type === 'bar') {
+        const barWidth = Math.max(10, Math.floor(700 / data.length) - 6);
+        data.forEach((d, i) => {
+          const barHeight = Math.max(2, Math.round(((d.value - minVal) / range) * 280));
+          const x = 50 + i * (barWidth + 6);
+          const y = 320 - barHeight;
+
+          const rect = document.createElementNS(svgNS, 'rect');
+          rect.setAttribute('x', String(x));
+          rect.setAttribute('y', String(y));
+          rect.setAttribute('width', String(barWidth));
+          rect.setAttribute('height', String(barHeight));
+          rect.setAttribute('fill', colors[i % colors.length]);
+          rect.setAttribute('rx', '3');
+
+          const title = document.createElementNS(svgNS, 'title');
+          title.textContent = d.label + ': ' + d.value;
+          rect.appendChild(title);
+          svg.appendChild(rect);
+
+          if (data.length <= 25) {
+            const text = document.createElementNS(svgNS, 'text');
+            text.setAttribute('x', String(x + barWidth / 2));
+            text.setAttribute('y', '340');
+            text.setAttribute('text-anchor', 'middle');
+            text.setAttribute('fill', 'var(--vscode-foreground)');
+            text.setAttribute('font-size', '10');
+            text.textContent = d.label.length > 8 ? d.label.slice(0, 7) + '..' : d.label;
+            svg.appendChild(text);
+          }
+        });
+      } else if (type === 'line') {
+        const points = data.map((d, i) => {
+          const x = 50 + (i / Math.max(data.length - 1, 1)) * 700;
+          const y = 320 - Math.round(((d.value - minVal) / range) * 280);
+          return x + ',' + y;
+        }).join(' ');
+
+        const polyline = document.createElementNS(svgNS, 'polyline');
+        polyline.setAttribute('fill', 'none');
+        polyline.setAttribute('stroke', '#3b82f6');
+        polyline.setAttribute('stroke-width', '3');
+        polyline.setAttribute('points', points);
+        svg.appendChild(polyline);
+
+        data.forEach((d, i) => {
+          const x = 50 + (i / Math.max(data.length - 1, 1)) * 700;
+          const y = 320 - Math.round(((d.value - minVal) / range) * 280);
+          const circle = document.createElementNS(svgNS, 'circle');
+          circle.setAttribute('cx', String(x));
+          circle.setAttribute('cy', String(y));
+          circle.setAttribute('r', '4');
+          circle.setAttribute('fill', '#60a5fa');
+          const title = document.createElementNS(svgNS, 'title');
+          title.textContent = d.label + ': ' + d.value;
+          circle.appendChild(title);
+          svg.appendChild(circle);
+        });
+      } else if (type === 'pie') {
+        const total = data.reduce((acc, d) => acc + Math.max(0, d.value), 0) || 1;
+        let startAngle = 0;
+        const cx = 400;
+        const cy = 180;
+        const r = 130;
+
+        data.slice(0, 10).forEach((d, i) => {
+          const sliceAngle = (Math.max(0, d.value) / total) * 2 * Math.PI;
+          const endAngle = startAngle + sliceAngle;
+
+          const x1 = cx + r * Math.cos(startAngle);
+          const y1 = cy + r * Math.sin(startAngle);
+          const x2 = cx + r * Math.cos(endAngle);
+          const y2 = cy + r * Math.sin(endAngle);
+
+          const largeArc = sliceAngle > Math.PI ? 1 : 0;
+          const pathData = 'M ' + cx + ' ' + cy + ' L ' + x1 + ' ' + y1 + ' A ' + r + ' ' + r + ' 0 ' + largeArc + ' 1 ' + x2 + ' ' + y2 + ' Z';
+
+          const path = document.createElementNS(svgNS, 'path');
+          path.setAttribute('d', pathData);
+          path.setAttribute('fill', colors[i % colors.length]);
+          const title = document.createElementNS(svgNS, 'title');
+          title.textContent = d.label + ': ' + d.value + ' (' + Math.round((d.value / total) * 100) + '%)';
+          path.appendChild(title);
+          svg.appendChild(path);
+
+          startAngle = endAngle;
+        });
+      }
+
+      canvas.appendChild(svg);
+    }
+
+    function updateSummaryBar(rows) {
+      const summaryBar = document.getElementById('summaryBar');
+      if (!summaryBar) return;
+      summaryBar.textContent = '';
+
+      const totalSpan = document.createElement('span');
+      totalSpan.innerHTML = '📊 <strong>' + '${text.stats}' + ':</strong> ' + (totalCount || rows.length);
+      summaryBar.appendChild(totalSpan);
+
+      const numericCols = currentFields.filter(f => {
+        const t = (f.type || '').toLowerCase();
+        return t.includes('int') || t.includes('float') || t.includes('decimal') || t.includes('numeric') || t.includes('double') || t.includes('real');
+      });
+
+      numericCols.slice(0, 3).forEach(f => {
+        const vals = rows.map(r => Number(r[f.name])).filter(v => !isNaN(v) && v !== null);
+        if (vals.length > 0) {
+          const sum = vals.reduce((a, b) => a + b, 0);
+          const avg = sum / vals.length;
+          const min = Math.min(...vals);
+          const max = Math.max(...vals);
+
+          const colSpan = document.createElement('span');
+          colSpan.style.borderLeft = '1px solid var(--vscode-panel-border, #444)';
+          colSpan.style.paddingLeft = '12px';
+          colSpan.textContent = f.name + ': Sum=' + sum.toLocaleString() + ' | Avg=' + avg.toFixed(2) + ' | Min=' + min + ' | Max=' + max;
+          summaryBar.appendChild(colSpan);
+        }
+      });
+    }
+
+    function copyAs(format) {
+      if (!allRows || allRows.length === 0) {
+        alert('${ru ? "Нет данных для копирования" : "No data to copy"}');
+        return;
+      }
+      let text = '';
+      if (format === 'markdown') {
+        const colNames = currentFields.map(f => f.name);
+        text = '| ' + colNames.join(' | ') + ' |\\n| ' + colNames.map(() => '---').join(' | ') + ' |\\n';
+        text += allRows.map(r => '| ' + colNames.map(c => (r[c] === null || r[c] === undefined ? 'NULL' : String(r[c]))).join(' | ') + ' |').join('\\n');
+      } else if (format === 'sql') {
+        const colNames = currentFields.map(f => '"' + f.name + '"').join(', ');
+        text = allRows.map(r => {
+          const vals = currentFields.map(f => {
+            const v = r[f.name];
+            if (v === null || v === undefined) return 'NULL';
+            if (typeof v === 'number') return String(v);
+            return "'" + String(v).replace(/'/g, "''") + "'";
+          }).join(', ');
+          return 'INSERT INTO "table" (' + colNames + ') VALUES (' + vals + ');';
+        }).join('\\n');
+      } else if (format === 'json') {
+        text = JSON.stringify(allRows, null, 2);
+      } else if (format === 'ts') {
+        const lines = currentFields.map(f => {
+          let t = 'string';
+          const type = (f.type || '').toLowerCase();
+          if (type.includes('int') || type.includes('float') || type.includes('decimal') || type.includes('numeric')) t = 'number';
+          else if (type.includes('bool')) t = 'boolean';
+          return '  ' + f.name + (f.nullable ? '?: ' : ': ') + t + ';';
+        });
+        text = 'export interface RowData {\\n' + lines.join('\\n') + '\\n}';
+      }
+      navigator.clipboard.writeText(text);
+      alert('${ru ? "Скопировано в буфер обмена!" : "Copied to clipboard!"}');
+    }
 
     // Automatically trigger initial load when webview is ready
     vscode.postMessage({ type: 'fetchData', params: { page: 1, pageSize } });

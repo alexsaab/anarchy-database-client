@@ -236,6 +236,62 @@ export class CouchdbDriver extends BaseDriver {
   }
 
   async getTableData(tableName: string, params: PageParams, schemaName?: string): Promise<QueryResult> {
-    return this.executeQuery('');
+    const startTime = Date.now();
+    const db = tableName || this.config.database || '_users';
+
+    try {
+      const res = await this.httpPost(`/${db}/_find`, {
+        selector: {},
+        limit: params.pageSize || 50,
+        skip: ((params.page || 1) - 1) * (params.pageSize || 50),
+      });
+
+      const docs = res.docs || [];
+      const costTimeMs = Date.now() - startTime;
+
+      const fields: ColumnInfo[] = [
+        { name: '_id', type: 'string', isPrimaryKey: true, nullable: false },
+        { name: '_rev', type: 'string', nullable: false },
+        { name: 'document', type: 'json', nullable: true },
+      ];
+
+      const rows = docs.map((doc: any) => ({
+        _id: doc._id,
+        _rev: doc._rev,
+        document: JSON.stringify(doc),
+      }));
+
+      return {
+        rows,
+        fields,
+        totalCount: docs.length,
+        affectedRows: docs.length,
+        costTimeMs,
+      };
+    } catch (e) {
+      const res = await this.httpGet(`/${db}/_all_docs?include_docs=true&limit=${params.pageSize || 50}&skip=${((params.page || 1) - 1) * (params.pageSize || 50)}`);
+      const docs = (res.rows || []).map((r: any) => r.doc || { _id: r.id, _rev: r.value?.rev });
+      const costTimeMs = Date.now() - startTime;
+
+      const fields: ColumnInfo[] = [
+        { name: '_id', type: 'string', isPrimaryKey: true, nullable: false },
+        { name: '_rev', type: 'string', nullable: false },
+        { name: 'document', type: 'json', nullable: true },
+      ];
+
+      const rows = docs.map((doc: any) => ({
+        _id: doc._id,
+        _rev: doc._rev,
+        document: JSON.stringify(doc),
+      }));
+
+      return {
+        rows,
+        fields,
+        totalCount: docs.length,
+        affectedRows: docs.length,
+        costTimeMs,
+      };
+    }
   }
 }

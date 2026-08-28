@@ -202,12 +202,29 @@ export class MongoDriver extends BaseDriver {
     const docs = await db.collection(tableName).find().skip(skip).limit(params.pageSize).toArray();
     const costTimeMs = Date.now() - startTime;
 
-    const sample = docs[0] || {};
-    const fields: ColumnInfo[] = Object.keys(sample).map((k) => ({
+    const fieldSet = new Set<string>();
+    for (const d of docs) {
+      if (d && typeof d === 'object') {
+        for (const k of Object.keys(d)) {
+          fieldSet.add(k);
+        }
+      }
+    }
+
+    let fields: ColumnInfo[] = Array.from(fieldSet).map((k) => ({
       name: k,
-      type: typeof sample[k],
+      type: typeof (docs[0] || {})[k],
       nullable: true,
+      isPrimaryKey: k === '_id',
     }));
+
+    if (fields.length === 0) {
+      try {
+        fields = await this.getColumns(tableName, dbName);
+      } catch (e) {
+        fields = [{ name: '_id', type: 'ObjectId', isPrimaryKey: true, nullable: false }];
+      }
+    }
 
     return {
       rows: docs,

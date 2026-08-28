@@ -13,13 +13,45 @@ import * as vm from 'vm';
  */
 const webviewDir = path.join(__dirname, '..', 'src', 'webview');
 
+/**
+ * The webview <script> is written inside a TypeScript template literal, so the
+ * compiler resolves every backslash escape once at build time. To parse the
+ * script as the browser will see it we must apply that same unescaping here.
+ * This is a single left-to-right pass, so `\\n` becomes a literal `\n` (two
+ * characters) while a bare `\n` becomes a newline -- the exact split that broke
+ * generated JS when a string literal like 'a\nb' was written without doubling
+ * the backslash.
+ */
+const ESCAPE = /\\(?:[nrtbfv0]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\{[0-9a-fA-F]+\}|['"`\\$]|\n)/g;
+
+function unescapeTemplate(script: string): string {
+  return script.replace(ESCAPE, (m) => {
+    switch (m) {
+      case '\\n': return '\n';
+      case '\\r': return '\r';
+      case '\\t': return '\t';
+      case '\\b': return '\b';
+      case '\\f': return '\f';
+      case '\\v': return '\v';
+      case '\\0': return '\0';
+      case '\\\\': return '\\';
+      case "\\'": return "'";
+      case '\\"': return '"';
+      case '\\`': return '`';
+      case '\\$': return '$';
+      default:
+        if (m.startsWith('\\x')) return String.fromCharCode(parseInt(m.slice(2), 16));
+        if (m.startsWith('\\u{')) return String.fromCodePoint(parseInt(m.slice(3, -1), 16));
+        if (m.startsWith('\\u')) return String.fromCharCode(parseInt(m.slice(2), 16));
+        return m;
+    }
+  });
+}
+
 function emittedScripts(tsSource: string): string[] {
   return [...tsSource.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) =>
-    m[1]
-      // Emulate template-literal unescaping, then blank out ${...} holes.
-      .replace(/\\'/g, "'")
-      .replace(/\\`/g, '`')
-      .replace(/\$\{[^{}]*(\{[^{}]*\}[^{}]*)*\}/g, '"__EXPR__"')
+    // Blank out ${...} interpolation holes first, then resolve escapes.
+    unescapeTemplate(m[1].replace(/\$\{[^{}]*(\{[^{}]*\}[^{}]*)*\}/g, '"__EXPR__"'))
   );
 }
 

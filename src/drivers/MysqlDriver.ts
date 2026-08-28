@@ -76,6 +76,9 @@ export class MysqlDriver extends BaseDriver {
     const pool = await this.acquirePool();
     const conn = await pool.getConnection();
     try {
+      if (this.config.database) {
+        await conn.query(`USE \`${this.config.database}\`;`).catch(() => {});
+      }
       if (queryId != null) {
         this.running.set(queryId, (conn as any).threadId);
       }
@@ -173,6 +176,7 @@ export class MysqlDriver extends BaseDriver {
     const rows = results as any[];
     return rows.map((r: any) => ({
       name: String(r.TABLE_NAME || r.table_name || Object.values(r)[0]),
+      schema: targetDb,
       type: 'table',
     }));
   }
@@ -195,6 +199,7 @@ export class MysqlDriver extends BaseDriver {
     const rows = results as any[];
     return rows.map((r: any) => ({
       name: String(r.TABLE_NAME || r.table_name || Object.values(r)[0]),
+      schema: targetDb,
       type: 'view',
     }));
   }
@@ -282,35 +287,54 @@ export class MysqlDriver extends BaseDriver {
   }
 
   async getColumns(tableName: string, databaseName?: string): Promise<ColumnInfo[]> {
-    const targetDb = databaseName || this.config.database;
-    if (!targetDb) return [];
+    const targetDb = databaseName || (this.config.database !== 'public' ? this.config.database : undefined);
 
-    const [results] = await this.queryWithRetry(
-      `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, COLUMN_COMMENT, EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '${targetDb}' AND TABLE_NAME = '${tableName}' ORDER BY ORDINAL_POSITION;`
-    );
+    try {
+      if (targetDb) {
+        const [results] = await this.queryWithRetry(
+          `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, COLUMN_COMMENT, EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '${targetDb}' AND TABLE_NAME = '${tableName}' ORDER BY ORDINAL_POSITION;`
+        );
 
-    const rows = results as any[];
-    return rows.map((r: any) => {
-      const colName = r.COLUMN_NAME ?? r.column_name ?? r.Field ?? r.field ?? Object.values(r)[0];
-      const dataType = r.DATA_TYPE ?? r.data_type ?? r.Type ?? r.type ?? 'VARCHAR';
-      const isNullable = r.IS_NULLABLE ?? r.is_nullable ?? r.Null ?? r.null;
-      const colKey = r.COLUMN_KEY ?? r.column_key ?? r.Key ?? r.key;
-      const colDef = r.COLUMN_DEFAULT ?? r.column_default ?? r.Default ?? r.default;
-      const colComment = r.COLUMN_COMMENT ?? r.column_comment ?? r.Comment ?? r.comment;
+        const rows = results as any[];
+        if (rows && rows.length > 0) {
+          return rows.map((r: any) => {
+            const colName = r.COLUMN_NAME ?? r.column_name ?? r.Field ?? r.field ?? Object.values(r)[0];
+            const dataType = r.DATA_TYPE ?? r.data_type ?? r.Type ?? r.type ?? 'VARCHAR';
+            const isNullable = r.IS_NULLABLE ?? r.is_nullable ?? r.Null ?? r.null;
+            const colKey = r.COLUMN_KEY ?? r.column_key ?? r.Key ?? r.key;
+            const colDef = r.COLUMN_DEFAULT ?? r.column_default ?? r.Default ?? r.default;
+            const colComment = r.COLUMN_COMMENT ?? r.column_comment ?? r.Comment ?? r.comment;
 
-      return {
-        name: String(colName),
-        type: String(dataType).toUpperCase(),
-        nullable: isNullable === 'YES' || isNullable === true,
-        isPrimaryKey: colKey === 'PRI',
-        defaultValue: colDef !== null ? String(colDef) : undefined,
-        comment: colComment || undefined,
-      };
-    });
+            return {
+              name: String(colName),
+              type: String(dataType).toUpperCase(),
+              nullable: isNullable === 'YES' || isNullable === true,
+              isPrimaryKey: colKey === 'PRI',
+              defaultValue: colDef !== null ? String(colDef) : undefined,
+              comment: colComment || undefined,
+            };
+          });
+        }
+      }
+
+      // Fallback: SHOW COLUMNS FROM `db`.`table` or `table`
+      const tableRef = targetDb ? `\`${targetDb}\`.\`${tableName}\`` : `\`${tableName}\``;
+      const [results] = await this.queryWithRetry(`SHOW COLUMNS FROM ${tableRef};`);
+      const rows = results as any[];
+      return (rows || []).map((r: any) => ({
+        name: String(r.Field ?? r.field ?? Object.values(r)[0]),
+        type: String(r.Type ?? r.type ?? 'VARCHAR').toUpperCase(),
+        nullable: (r.Null ?? r.null) === 'YES',
+        isPrimaryKey: (r.Key ?? r.key) === 'PRI',
+        defaultValue: (r.Default ?? r.default) !== null ? String(r.Default ?? r.default) : undefined,
+      }));
+    } catch {
+      return [];
+    }
   }
 
   async getForeignKeys(tableName: string, databaseName?: string): Promise<ForeignKeyInfo[]> {
-    const targetDb = databaseName || this.config.database;
+    const targetDb = databaseName || (this.config.database !== 'public' ? this.config.database : undefined);
     if (!targetDb) return [];
 
     const [results] = await this.queryWithRetry(
@@ -328,28 +352,29 @@ export class MysqlDriver extends BaseDriver {
 
   async executeQuery(sql: string, queryId?: number): Promise<QueryResult> {
     const startTime = Date.now();
-
-    const db = this.config.database;
-    if (db) {
-      try {
-        await this.queryWithRetry(`USE \`${db}\`;`);
-      } catch (e) {}
-    }
-
     const [results, fields] = await this.queryWithRetry(sql, undefined, queryId);
     const costTimeMs = Date.now() - startTime;
 
     if (Array.isArray(results)) {
-      const columnFields: ColumnInfo[] = (fields || []).map((f: any) => ({
+      let rowsData = results;
+      let fieldList = fields;
+      if (results.length > 0 && Array.isArray(results[0])) {
+        rowsData = results[0];
+        if (Array.isArray(fields) && fields.length > 0 && Array.isArray(fields[0])) {
+          fieldList = fields[0] as any;
+        }
+      }
+
+      const columnFields: ColumnInfo[] = (fieldList || []).map((f: any) => ({
         name: f.name,
-        type: String(f.type || 'VARCHAR'),
+        type: typeof f.type === 'string' ? f.type : 'VARCHAR',
         nullable: true,
       }));
 
       return {
-        rows: results as any[],
+        rows: rowsData as any[],
         fields: columnFields,
-        affectedRows: results.length,
+        affectedRows: rowsData.length,
         costTimeMs,
       };
     } else {
@@ -357,7 +382,7 @@ export class MysqlDriver extends BaseDriver {
       return {
         rows: [],
         fields: [],
-        affectedRows: okPacket.affectedRows || 0,
+        affectedRows: okPacket?.affectedRows || 0,
         costTimeMs,
       };
     }
@@ -373,10 +398,23 @@ export class MysqlDriver extends BaseDriver {
     const costTimeMs = Date.now() - startTime;
 
     if (Array.isArray(results)) {
+      let rowsData = results;
+      let fieldList = fields;
+      if (results.length > 0 && Array.isArray(results[0])) {
+        rowsData = results[0];
+        if (Array.isArray(fields) && fields.length > 0 && Array.isArray(fields[0])) {
+          fieldList = fields[0] as any;
+        }
+      }
+
       return {
-        rows: results as any[],
-        fields: (fields || []).map((f: any) => ({ name: f.name, type: String(f.type || 'VARCHAR'), nullable: true })),
-        affectedRows: results.length,
+        rows: rowsData as any[],
+        fields: (fieldList || []).map((f: any) => ({
+          name: f.name,
+          type: typeof f.type === 'string' ? f.type : 'VARCHAR',
+          nullable: true,
+        })),
+        affectedRows: rowsData.length,
         costTimeMs,
       };
     }
@@ -389,20 +427,62 @@ export class MysqlDriver extends BaseDriver {
   }
 
   async getTableData(tableName: string, params: PageParams, schemaName?: string): Promise<QueryResult> {
-    const db = this.config.database || schemaName;
+    const db = this.config.database || (schemaName && schemaName !== 'public' ? schemaName : undefined);
+    if (db && !this.config.database) {
+      this.config.database = db;
+    }
     const tableRef = db ? `\`${db}\`.\`${tableName}\`` : `\`${tableName}\``;
-    const columns = await this.getColumns(tableName, db);
+    
+    let columns: ColumnInfo[] = [];
+    try {
+      columns = await this.getColumns(tableName, db);
+    } catch {
+      columns = [];
+    }
+
     const query = buildPagedQuery({ dbType: 'MySQL', tableRef, params, columns });
 
-    const countRes = query.countParams.length
-      ? await this.executeParameterized(query.countSql, query.countParams)
-      : await this.executeQuery(query.countSql);
-    const totalCount = parseInt(countRes.rows[0]?.total || '0', 10);
+    let totalCount = 0;
+    try {
+      const countRes = query.countParams.length
+        ? await this.executeParameterized(query.countSql, query.countParams)
+        : await this.executeQuery(query.countSql);
+      const firstCountRow = countRes.rows && countRes.rows.length > 0 ? countRes.rows[0] : null;
+      const totalVal = firstCountRow ? (firstCountRow.total ?? firstCountRow.TOTAL ?? Object.values(firstCountRow)[0]) : 0;
+      totalCount = typeof totalVal === 'number' ? totalVal : parseInt(String(totalVal || 0), 10);
+    } catch {
+      totalCount = 0;
+    }
 
-    const result = query.rowsParams.length
-      ? await this.executeParameterized(query.rowsSql, query.rowsParams)
-      : await this.executeQuery(query.rowsSql);
-    result.totalCount = totalCount;
+    let result: QueryResult;
+    try {
+      result = query.rowsParams.length
+        ? await this.executeParameterized(query.rowsSql, query.rowsParams)
+        : await this.executeQuery(query.rowsSql);
+    } catch (err: any) {
+      try {
+        const fallbackSql = `SELECT * FROM \`${tableName}\` LIMIT ${params.pageSize || 50} OFFSET ${((params.page || 1) - 1) * (params.pageSize || 50)};`;
+        result = await this.executeQuery(fallbackSql);
+      } catch {
+        throw err;
+      }
+    }
+
+    if (totalCount === 0 && result.rows && result.rows.length > 0) {
+      totalCount = result.rows.length;
+    }
+    result.totalCount = isNaN(totalCount) ? 0 : totalCount;
+
+    if (columns && columns.length > 0) {
+      result.fields = columns;
+    } else if ((!result.fields || result.fields.length === 0) && result.rows && result.rows.length > 0) {
+      result.fields = Object.keys(result.rows[0]).map((k) => ({
+        name: k,
+        type: 'VARCHAR',
+        nullable: true,
+      }));
+    }
+
     return finishPage(result, query.reversed);
   }
 }

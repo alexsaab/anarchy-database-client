@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { DriverManager } from '../drivers/DriverManager.js';
+import { AiService } from '../ai/AiService.js';
 import { isRussian, t } from '../util/i18n.js';
 
 export class AiSqlAssistantWebviewProvider {
@@ -33,11 +34,19 @@ export class AiSqlAssistantWebviewProvider {
     panel.webview.onDidReceiveMessage(async (msg) => {
       if (msg.type === 'generateSql') {
         const prompt = msg.prompt;
-        const generatedSql = AiSqlAssistantWebviewProvider.generateSqlFromPrompt(prompt, schemaSummary, connectionConfig?.type || 'SQL');
+        const ollamaEndpoint = msg.ollamaEndpoint;
+        const generatedSql = await AiService.generateSql(
+          prompt,
+          schemaSummary,
+          connectionConfig?.type || 'SQL',
+          undefined,
+          ollamaEndpoint
+        );
         panel.webview.postMessage({
           type: 'aiResult',
           sql: generatedSql.sql,
           explanation: generatedSql.explanation,
+          provider: generatedSql.provider,
         });
       } else if (msg.type === 'executeSql' && connectionConfig) {
         try {

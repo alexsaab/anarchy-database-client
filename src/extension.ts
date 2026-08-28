@@ -35,6 +35,9 @@ import { ImportService } from './import/ImportService.js';
 import { SqlScriptRunner } from './script/SqlScriptRunner.js';
 import { SchemaNode } from './tree/SchemaNode.js';
 import { TableInfo } from './model/QueryTypes.js';
+import { SchemaMetadataCache } from './provider/SchemaMetadataCache.js';
+import { SqlCompletionProvider } from './provider/SqlCompletionProvider.js';
+import { SqlHoverProvider } from './provider/SqlHoverProvider.js';
 import { IconHelper } from './util/IconHelper.js';
 import { t } from './util/i18n.js';
 
@@ -43,6 +46,8 @@ export function activate(context: vscode.ExtensionContext) {
 
   const storageService = new ConnectionStorageService(context);
   const historyStorage = QueryHistoryStorage.init(context);
+  SchemaMetadataCache.getInstance().init(storageService);
+  SchemaMetadataCache.getInstance().refreshAll().catch(() => {});
   const treeProvider = new DatabaseTreeProvider(context, storageService);
 
   // Register Tree View
@@ -311,7 +316,8 @@ export function activate(context: vscode.ExtensionContext) {
 
       const password = await storageService.getPassword(targetConn.id);
       const sshPassword = await storageService.getSshPassword(targetConn.id);
-      const tableNode = new TableNode(tbl, targetConn, password, sshPassword);
+      const connWithDb = { ...targetConn, database: foundItem.db || targetConn.database };
+      const tableNode = new TableNode(tbl, connWithDb, password, sshPassword);
 
       await vscode.commands.executeCommand('dbClient.openTable', tableNode);
     })
@@ -712,22 +718,21 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  // Register SQL IntelliSense
+  // Register SQL IntelliSense & Hover Documentation
+  const completionProvider = new SqlCompletionProvider();
   context.subscriptions.push(
     vscode.languages.registerCompletionItemProvider(
       { language: 'sql' },
-      {
-        provideCompletionItems(document: vscode.TextDocument, position: vscode.Position) {
-          const keywords = [
-            'SELECT', 'FROM', 'WHERE', 'INSERT INTO', 'UPDATE', 'DELETE FROM',
-            'JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN', 'GROUP BY', 'ORDER BY',
-            'HAVING', 'LIMIT', 'OFFSET', 'CREATE TABLE', 'ALTER TABLE', 'DROP TABLE',
-            'CREATE VIEW', 'CREATE PROCEDURE', 'CREATE FUNCTION', 'CREATE TRIGGER',
-          ];
+      completionProvider,
+      '.', ' ', '(', ','
+    )
+  );
 
-          return keywords.map((k) => new vscode.CompletionItem(k, vscode.CompletionItemKind.Keyword));
-        },
-      }
+  const hoverProvider = new SqlHoverProvider();
+  context.subscriptions.push(
+    vscode.languages.registerHoverProvider(
+      { language: 'sql' },
+      hoverProvider
     )
   );
 }

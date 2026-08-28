@@ -6,6 +6,7 @@ import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { QueryResult } from '../model/QueryTypes.js';
 import { t } from '../util/i18n.js';
 import { QueryHistoryStorage } from '../storage/QueryHistoryStorage.js';
+import { DestructiveQueryGuard } from '../sql/DestructiveQueryGuard.js';
 
 export interface SqlStatement {
   sql: string;
@@ -178,6 +179,40 @@ export class SqlScriptRunner {
     if (statements.length === 0) {
       vscode.window.showWarningMessage(t(`${fileName} contains no SQL statements.`, `В ${fileName} нет SQL-запросов.`));
       return;
+    }
+
+    if (connectionConfig.readOnly) {
+      for (const st of statements) {
+        const check = DestructiveQueryGuard.checkQuery(st.sql, connectionConfig);
+        if (check.isReadOnlyViolation) {
+          vscode.window.showErrorMessage(
+            t(`Cannot run script: "${connectionConfig.name}" is in Read-Only mode.`,
+              `Невозможно запустить скрипт: "${connectionConfig.name}" в режиме только для чтения.`)
+          );
+          return;
+        }
+      }
+    }
+
+    if (DestructiveQueryGuard.isProduction(connectionConfig)) {
+      const destructiveStatements = statements
+        .map((s) => ({ s, check: DestructiveQueryGuard.checkQuery(s.sql, connectionConfig) }))
+        .filter((x) => x.check.isDestructive);
+
+      if (destructiveStatements.length > 0) {
+        const executeProd = t('Execute on Production', 'Выполнить на Production');
+        const confirmProd = await vscode.window.showWarningMessage(
+          t(
+            `⚠️ Production Guard: Script contains ${destructiveStatements.length} potentially destructive statement(s) (e.g. ${destructiveStatements[0].check.reason}). Execute on "${connectionConfig.name}"?`,
+            `⚠️ Защита Production: Скрипт содержит ${destructiveStatements.length} опасных запросов (например: ${destructiveStatements[0].check.reason}). Выполнить на "${connectionConfig.name}"?`
+          ),
+          { modal: true },
+          executeProd
+        );
+        if (confirmProd !== executeProd) {
+          return;
+        }
+      }
     }
 
     const target = `${connectionConfig.name}${connectionConfig.database ? ` / ${connectionConfig.database}` : ''}`;

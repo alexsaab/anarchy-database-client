@@ -103,6 +103,11 @@ export class ConnectWebviewProvider {
       sshPass: ru ? 'SSH Пароль' : 'SSH Password',
       usePk: ru ? 'Использовать SSH Ключ (Private Key)' : 'Use Private Key File',
       pkPath: ru ? 'Путь к Private Key' : 'Private Key Path',
+      safetySection: ru ? '🛡️ Безопасность и Режим работы' : '🛡️ Safety & Modes',
+      safeMode: ru ? 'Защита от опасных запросов (Safe Mode)' : 'Production Guard / Safe Mode',
+      safeModeDesc: ru ? 'Требовать подтверждение для DROP, TRUNCATE и UPDATE/DELETE без WHERE' : 'Prompt confirmation for DROP, TRUNCATE and unconstrained UPDATE/DELETE',
+      readOnly: ru ? 'Режим "Только для чтения" (Read-Only)' : 'Read-Only Mode',
+      readOnlyDesc: ru ? 'Полностью заблокировать любые операции изменения данных' : 'Block all write, alter and drop operations',
       testBtn: ru ? '⚡ Проверить Соединение' : '⚡ Test Connection',
       saveBtn: ru ? '💾 Сохранить Подключение' : '💾 Save Connection',
     };
@@ -336,6 +341,16 @@ export class ConnectWebviewProvider {
     </div>
   </div>
 
+  <div class="section-title">${text.safetySection}</div>
+  <div class="form-group">
+    <label><input type="checkbox" id="safeMode"> <strong>${text.safeMode}</strong></label>
+    <div style="font-size: 11px; opacity: 0.7; margin-left: 20px;">${text.safeModeDesc}</div>
+  </div>
+  <div class="form-group">
+    <label><input type="checkbox" id="readOnly"> <strong>${text.readOnly}</strong></label>
+    <div style="font-size: 11px; opacity: 0.7; margin-left: 20px;">${text.readOnlyDesc}</div>
+  </div>
+
   <div class="actions">
     <button class="secondary" id="testBtn">${text.testBtn}</button>
     <button class="primary" id="saveBtn">${text.saveBtn}</button>
@@ -374,6 +389,8 @@ export class ConnectWebviewProvider {
       document.getElementById('password').value = initPassword || '';
       document.getElementById('database').value = initial.database || '';
       document.getElementById('dbPath').value = initial.dbPath || '';
+      document.getElementById('safeMode').checked = !!initial.safeMode;
+      document.getElementById('readOnly').checked = !!initial.readOnly;
       if (initial.ssh && initial.ssh.enabled) {
         document.getElementById('sshEnabled').checked = true;
         document.getElementById('sshHost').value = initial.ssh.host || '';
@@ -439,6 +456,8 @@ export class ConnectWebviewProvider {
           user: document.getElementById('user').value,
           database: document.getElementById('database').value,
           dbPath: document.getElementById('dbPath').value,
+          safeMode: document.getElementById('safeMode').checked,
+          readOnly: document.getElementById('readOnly').checked,
           ssh: {
             enabled: document.getElementById('sshEnabled').checked,
             host: document.getElementById('sshHost').value,
