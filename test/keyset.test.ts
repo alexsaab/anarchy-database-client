@@ -90,3 +90,21 @@ test('the first page orders without a cursor', () => {
     '"a" ASC, "b" DESC'
   );
 });
+
+test('buildPagedQuery optimizes last page by reversing order and limit without deep offset', () => {
+  const { buildPagedQuery } = require('../src/sql/PagedQuery.js');
+  const query = buildPagedQuery({
+    dbType: 'MySQL',
+    tableRef: '`users`',
+    params: {
+      page: 100,
+      pageSize: 50,
+      isLastPage: true,
+      totalCount: 4975,
+    },
+    columns: cols,
+  });
+
+  assert.equal(query.rowsSql, 'SELECT * FROM `users` ORDER BY `id` DESC LIMIT 25 OFFSET 0');
+  assert.equal(query.reversed, true);
+});

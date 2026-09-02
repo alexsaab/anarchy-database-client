@@ -58,6 +58,23 @@ export function buildPagedQuery(options: PagedQueryOptions): PagedQuery {
   const keys = params.cursor ? keyColumnsFor(columns, params.sortField, params.sortOrder) : null;
   const keyset = keys && params.cursor ? buildKeysetClause(dbType, keys, params.cursor.values, params.cursor.direction) : null;
 
+  // Optimized last-page query: when requesting the last page of a large table,
+  // we invert the sort direction and query the tail rows without a deep OFFSET,
+  // then reverse the returned rows back in finishPage().
+  const allKeys = keyColumnsFor(columns, params.sortField, params.sortOrder);
+  const remainder =
+    params.isLastPage && typeof params.totalCount === 'number' && params.totalCount > 0
+      ? params.totalCount - (params.page - 1) * params.pageSize
+      : 0;
+  const canUseReverseTail =
+    Boolean(params.isLastPage) &&
+    params.page > 1 &&
+    !params.cursor &&
+    allKeys !== null &&
+    allKeys.length > 0 &&
+    remainder > 0 &&
+    remainder <= params.pageSize;
+
   const rowsParams = [...filterParams];
   let rowsWhere = where;
   let orderBy: string;
@@ -68,6 +85,14 @@ export function buildPagedQuery(options: PagedQueryOptions): PagedQuery {
     rowsParams.push(...keyset.params);
     orderBy = keyset.orderBy;
     reversed = keyset.reversed;
+  } else if (canUseReverseTail && allKeys) {
+    orderBy = allKeys
+      .map((k) => {
+        const invDir = k.direction === 'ASC' ? 'DESC' : 'ASC';
+        return `${quoteId(dbType, k.name)} ${invDir}`;
+      })
+      .join(', ');
+    reversed = true;
   } else if (params.sortField) {
     const direction = params.sortOrder === 'DESC' ? 'DESC' : 'ASC';
     orderBy = `${quoteId(dbType, params.sortField)} ${direction}`;
@@ -78,13 +103,14 @@ export function buildPagedQuery(options: PagedQueryOptions): PagedQuery {
     orderBy = '';
   }
 
-  const offset = keyset && keyset.sql ? 0 : (params.page - 1) * params.pageSize;
+  const limit = canUseReverseTail ? remainder : params.pageSize;
+  const offset = (keyset && keyset.sql) || canUseReverseTail ? 0 : (params.page - 1) * params.pageSize;
   const orderClause = orderBy ? ` ORDER BY ${orderBy}` : '';
 
   const tail =
     limitStyle === 'offset-fetch'
-      ? ` OFFSET ${offset} ROWS FETCH NEXT ${params.pageSize} ROWS ONLY`
-      : ` LIMIT ${params.pageSize} OFFSET ${offset}`;
+      ? ` OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY`
+      : ` LIMIT ${limit} OFFSET ${offset}`;
 
   return {
     countSql,

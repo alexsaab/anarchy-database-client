@@ -50,4 +50,7 @@ export interface PageParams {
    * Present only for Next/Prev, where it replaces a deep OFFSET.
    */
   cursor?: { values: Record<string, any>; direction: 'next' | 'prev' };
+  /** True when requesting the last page, enabling reverse indexed scan optimization. */
+  isLastPage?: boolean;
+  totalCount?: number;
 }

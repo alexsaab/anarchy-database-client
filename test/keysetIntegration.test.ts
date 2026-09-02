@@ -139,3 +139,52 @@ test('search and keyset paging combine', async () => {
     assert.equal(overlap.length, 0, 'pages must not overlap');
   });
 });
+
+test('fast jump to last page returns exact tail rows in natural order', async () => {
+  await withDb(async (d) => {
+    // 100 rows, pageSize 7 -> 15 pages. Page 15 has 2 rows (id 99, 100).
+    const fastLast: any = await d.getTableData('t', {
+      page: 15,
+      pageSize: 7,
+      isLastPage: true,
+      totalCount: 100,
+    });
+    const regularLast: any = await d.getTableData('t', {
+      page: 15,
+      pageSize: 7,
+    });
+    assert.equal(fastLast.rows.length, 2);
+    assert.deepEqual(
+      fastLast.rows.map((r: any) => r.id),
+      [99, 100]
+    );
+    assert.deepEqual(
+      fastLast.rows.map((r: any) => r.id),
+      regularLast.rows.map((r: any) => r.id)
+    );
+  });
+});
+
+test('fast jump to last page works with custom sorting', async () => {
+  await withDb(async (d) => {
+    const fastLast: any = await d.getTableData('t', {
+      page: 10,
+      pageSize: 10,
+      sortField: 'grp',
+      sortOrder: 'ASC',
+      isLastPage: true,
+      totalCount: 100,
+    });
+    const regularLast: any = await d.getTableData('t', {
+      page: 10,
+      pageSize: 10,
+      sortField: 'grp',
+      sortOrder: 'ASC',
+    });
+    assert.equal(fastLast.rows.length, 10);
+    assert.deepEqual(
+      fastLast.rows.map((r: any) => r.id),
+      regularLast.rows.map((r: any) => r.id)
+    );
+  });
+});

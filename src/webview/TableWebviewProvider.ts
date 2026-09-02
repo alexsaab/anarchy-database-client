@@ -209,8 +209,14 @@ export class TableWebviewProvider {
           break;
         case 'fetchData':
           if (msg.params) {
-            const { cursor, ...rest } = msg.params;
-            currentParams = { ...currentParams, ...rest, cursor: undefined };
+            const { cursor, isLastPage, totalCount, ...rest } = msg.params;
+            currentParams = {
+              ...currentParams,
+              ...rest,
+              cursor: undefined,
+              isLastPage: Boolean(isLastPage),
+              totalCount: typeof totalCount === 'number' ? totalCount : undefined,
+            };
 
             const size = Number(currentParams.pageSize);
             if (!TableWebviewProvider.PAGE_SIZES.includes(size)) {
@@ -535,6 +541,11 @@ export class TableWebviewProvider {
       chartView: ru ? '📊 График' : '📊 Chart',
       gridView: ru ? '📋 Таблица' : '📋 Table',
       copyAs: ru ? '📋 Скопировать как...' : '📋 Copy As...',
+      firstPage: ru ? 'Первая страница (Home)' : 'First Page (Home)',
+      prevPage: ru ? 'Предыдущая страница (PageUp)' : 'Previous Page (PageUp)',
+      nextPage: ru ? 'Следующая страница (PageDown)' : 'Next Page (PageDown)',
+      lastPage: ru ? 'Последняя страница (End)' : 'Last Page (End)',
+      jumpToPage: ru ? 'Перейти к странице (Enter)' : 'Jump to page (Enter)',
     };
 
     return `<!DOCTYPE html>
@@ -592,6 +603,25 @@ export class TableWebviewProvider {
     }
     button:hover {
       background: var(--vscode-button-hoverBackground);
+    }
+    button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .toolbar input[type="number"] {
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border, #444);
+      border-radius: 4px;
+      padding: 4px 6px;
+      font-size: 13px;
+      box-sizing: border-box;
+      -moz-appearance: textfield;
+    }
+    .toolbar input[type="number"]::-webkit-outer-spin-button,
+    .toolbar input[type="number"]::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
     }
     .table-container {
       flex: 1;
@@ -728,9 +758,12 @@ export class TableWebviewProvider {
     <select id="pageSizeSelect" title="${text.rowsPerPage}">${pageSizeOptions}</select>
 
     <label>${text.page}</label>
-    <button id="prevBtn">◀</button>
-    <span id="pageInfo">1</span>
-    <button id="nextBtn">▶</button>
+    <button id="firstBtn" title="${text.firstPage}">⏮</button>
+    <button id="prevBtn" title="${text.prevPage}">◀</button>
+    <input type="number" id="pageInput" min="1" value="1" title="${text.jumpToPage}" style="width: 58px; text-align: center;">
+    <span id="pageTotal">/ 1</span>
+    <button id="nextBtn" title="${text.nextPage}">▶</button>
+    <button id="lastBtn" title="${text.lastPage}">⏭</button>
 
     <span>${text.export}</span>
     <button class="secondary" onclick="exportData('csv')">CSV</button>
@@ -949,20 +982,49 @@ export class TableWebviewProvider {
       });
     };
 
+    function goToPage(targetPage, cursorDirection, isLastPage) {
+      const maxPages = Math.max(1, Math.ceil(totalCount / pageSize));
+      let page = parseInt(targetPage, 10);
+      if (isNaN(page) || page < 1) page = 1;
+      if (page > maxPages) page = maxPages;
+      if (page === currentPage && !cursorDirection && !isLastPage) {
+        const input = document.getElementById('pageInput');
+        if (input) input.value = String(currentPage);
+        return;
+      }
+      currentPage = page;
+      const input = document.getElementById('pageInput');
+      if (input) input.value = String(currentPage);
+
+      let cursor = undefined;
+      if (cursorDirection === 'prev' && allRows.length > 0) {
+        cursor = { row: allRows[0], direction: 'prev' };
+      } else if (cursorDirection === 'next' && allRows.length > 0) {
+        cursor = { row: allRows[allRows.length - 1], direction: 'next' };
+      }
+
+      vscode.postMessage({
+        type: 'fetchData',
+        params: {
+          page: currentPage,
+          pageSize,
+          searchTerm: currentSearch || undefined,
+          sortField: currentSortField || undefined,
+          sortOrder: currentSortOrder || undefined,
+          cursor,
+          isLastPage: Boolean(isLastPage || (currentPage === maxPages && maxPages > 1)),
+          totalCount,
+        }
+      });
+    }
+
+    document.getElementById('firstBtn').onclick = () => {
+      goToPage(1);
+    };
+
     document.getElementById('prevBtn').onclick = () => {
       if (currentPage > 1) {
-        currentPage--;
-        vscode.postMessage({
-          type: 'fetchData',
-          params: {
-            page: currentPage,
-            pageSize,
-            searchTerm: currentSearch || undefined,
-            sortField: currentSortField || undefined,
-            sortOrder: currentSortOrder || undefined,
-            cursor: allRows.length > 0 ? { row: allRows[0], direction: 'prev' } : undefined,
-          }
-        });
+        goToPage(currentPage - 1, 'prev');
       }
     };
 
@@ -974,30 +1036,35 @@ export class TableWebviewProvider {
         params: {
           page: 1,
           pageSize,
+          searchTerm: currentSearch || undefined,
           sortField: currentSortField || undefined,
           sortOrder: currentSortOrder || undefined,
+          isLastPage: false,
         }
       });
     };
 
     document.getElementById('nextBtn').onclick = () => {
-      if (currentPage * pageSize < totalCount) {
-        currentPage++;
-        vscode.postMessage({
-          type: 'fetchData',
-          params: {
-            page: currentPage,
-            pageSize,
-            searchTerm: currentSearch || undefined,
-            sortField: currentSortField || undefined,
-            sortOrder: currentSortOrder || undefined,
-            // Stepping forward uses the last row as a cursor, so the server
-            // never has to count past a deep OFFSET. The extension ignores it
-            // when the table has no usable key.
-            cursor: allRows.length > 0 ? { row: allRows[allRows.length - 1], direction: 'next' } : undefined,
-          }
-        });
+      const maxPages = Math.max(1, Math.ceil(totalCount / pageSize));
+      if (currentPage < maxPages) {
+        goToPage(currentPage + 1, 'next');
       }
+    };
+
+    document.getElementById('lastBtn').onclick = () => {
+      const maxPages = Math.max(1, Math.ceil(totalCount / pageSize));
+      goToPage(maxPages, undefined, true);
+    };
+
+    const pageInputEl = document.getElementById('pageInput');
+    pageInputEl.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        goToPage(e.target.value);
+        e.target.blur();
+      }
+    };
+    pageInputEl.onchange = (e) => {
+      goToPage(e.target.value);
     };
 
     function editCell(colName, rowKey, currentVal) {
@@ -1194,7 +1261,25 @@ export class TableWebviewProvider {
           currentSortOrder = msg.params.sortOrder || null;
         }
 
-        document.getElementById('pageInfo').innerText = currentPage + ' / ' + Math.max(1, Math.ceil(totalCount / pageSize));
+        const maxPages = Math.max(1, Math.ceil(totalCount / pageSize));
+        const pageInput = document.getElementById('pageInput');
+        if (pageInput) {
+          pageInput.value = String(currentPage);
+          pageInput.max = String(maxPages);
+        }
+        const pageTotal = document.getElementById('pageTotal');
+        if (pageTotal) {
+          pageTotal.innerText = '/ ' + maxPages;
+        }
+        const firstBtn = document.getElementById('firstBtn');
+        if (firstBtn) firstBtn.disabled = currentPage <= 1;
+        const prevBtn = document.getElementById('prevBtn');
+        if (prevBtn) prevBtn.disabled = currentPage <= 1;
+        const nextBtn = document.getElementById('nextBtn');
+        if (nextBtn) nextBtn.disabled = currentPage >= maxPages;
+        const lastBtn = document.getElementById('lastBtn');
+        if (lastBtn) lastBtn.disabled = currentPage >= maxPages;
+
         document.getElementById('stats').innerText = '${text.stats}: ' + totalCount + ' | ${text.time}: ' + res.costTimeMs + 'ms';
 
         const headTr = document.getElementById('tableHead');
@@ -1485,6 +1570,32 @@ export class TableWebviewProvider {
       navigator.clipboard.writeText(text);
       alert('${ru ? "Скопировано в буфер обмена!" : "Copied to clipboard!"}');
     }
+
+    window.addEventListener('keydown', (e) => {
+      const active = document.activeElement;
+      const tag = active ? active.tagName.toLowerCase() : '';
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+        return;
+      }
+      const maxPages = Math.max(1, Math.ceil(totalCount / pageSize));
+      if (e.key === 'Home') {
+        e.preventDefault();
+        goToPage(1);
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        goToPage(maxPages, undefined, true);
+      } else if (e.key === 'PageUp') {
+        if (currentPage > 1) {
+          e.preventDefault();
+          goToPage(currentPage - 1, 'prev');
+        }
+      } else if (e.key === 'PageDown') {
+        if (currentPage < maxPages) {
+          e.preventDefault();
+          goToPage(currentPage + 1, 'next');
+        }
+      }
+    });
 
     // Automatically trigger initial load when webview is ready
     vscode.postMessage({ type: 'fetchData', params: { page: 1, pageSize } });
