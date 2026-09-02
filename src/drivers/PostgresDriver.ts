@@ -322,6 +322,9 @@ export class PostgresDriver extends BaseDriver {
       ? await this.executeParameterized(rowsSql, query.rowsParams)
       : await this.executeQuery(rowsSql);
     result.totalCount = totalCount;
+    if (columns && columns.length > 0) {
+      result.fields = columns;
+    }
     return finishPage(result, query.reversed);
   }
 }

@@ -209,6 +209,9 @@ export class SqliteDriver extends BaseDriver {
       ? await this.executeParameterized(query.rowsSql, query.rowsParams)
       : await this.executeQuery(query.rowsSql);
     result.totalCount = totalCount;
+    if (columns && columns.length > 0) {
+      result.fields = columns;
+    }
     return finishPage(result, query.reversed);
   }
 }

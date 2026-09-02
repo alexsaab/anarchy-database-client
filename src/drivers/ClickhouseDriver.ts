@@ -184,6 +184,12 @@ export class ClickhouseDriver extends BaseDriver {
 
     const queryResult = await this.executeQuery(sql);
     queryResult.totalCount = totalCount;
+    try {
+      const columns = await this.getColumns(tableName, db);
+      if (columns && columns.length > 0) {
+        queryResult.fields = columns;
+      }
+    } catch {}
     return queryResult;
   }
 }

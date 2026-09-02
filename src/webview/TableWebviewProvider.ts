@@ -120,11 +120,25 @@ export class TableWebviewProvider {
           }
         }
 
-        if (fields.length === 0) {
+        if (fields.length === 0 || !fields.some((f) => f.isPrimaryKey)) {
           try {
             const schemaCols = await driver.getColumns(tableName, connectionConfig.database, schemaName);
             if (schemaCols && schemaCols.length > 0) {
-              fields = schemaCols;
+              if (fields.length === 0) {
+                fields = schemaCols;
+              } else {
+                const colMap = new Map(schemaCols.map((c) => [c.name.toLowerCase(), c]));
+                fields = fields.map((f) => {
+                  const schemaCol = colMap.get(f.name.toLowerCase());
+                  return schemaCol
+                    ? {
+                        ...f,
+                        isPrimaryKey: schemaCol.isPrimaryKey ?? f.isPrimaryKey,
+                        type: f.type || schemaCol.type,
+                      }
+                    : f;
+                });
+              }
             }
           } catch (e) {}
         }

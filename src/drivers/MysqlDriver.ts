@@ -286,13 +286,16 @@ export class MysqlDriver extends BaseDriver {
     return `-- DDL for ${type} ${name}`;
   }
 
-  async getColumns(tableName: string, databaseName?: string): Promise<ColumnInfo[]> {
-    const targetDb = databaseName || (this.config.database !== 'public' ? this.config.database : undefined);
+  async getColumns(tableName: string, databaseName?: string, schemaName?: string): Promise<ColumnInfo[]> {
+    const targetDb =
+      databaseName ||
+      (schemaName && schemaName !== 'public' ? schemaName : undefined) ||
+      (this.config.database !== 'public' ? this.config.database : undefined);
 
     try {
       if (targetDb) {
         const [results] = await this.queryWithRetry(
-          `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, COLUMN_COMMENT, EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '${targetDb}' AND TABLE_NAME = '${tableName}' ORDER BY ORDINAL_POSITION;`
+          `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, COLUMN_COMMENT, EXTRA FROM information_schema.COLUMNS WHERE (TABLE_SCHEMA = '${targetDb}' OR LOWER(TABLE_SCHEMA) = LOWER('${targetDb}')) AND (TABLE_NAME = '${tableName}' OR LOWER(TABLE_NAME) = LOWER('${tableName}')) ORDER BY ORDINAL_POSITION;`
         );
 
         const rows = results as any[];
@@ -435,7 +438,7 @@ export class MysqlDriver extends BaseDriver {
     
     let columns: ColumnInfo[] = [];
     try {
-      columns = await this.getColumns(tableName, db);
+      columns = await this.getColumns(tableName, db, schemaName);
     } catch {
       columns = [];
     }
