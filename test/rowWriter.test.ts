@@ -76,3 +76,10 @@ test('the inline fallback escapes quotes so injection cannot close the literal',
   const out = inlineParams('WHERE a = ?', ["'; DROP TABLE t; --"]);
   assert.equal(out, "WHERE a = '''; DROP TABLE t; --'");
 });
+
+test('updateMultiple binds multiple columns and every key column', () => {
+  const w = new RowWriter(pg, 'PostgreSQL', '"public"."users"');
+  const { sql, params } = w.updateMultiple({ name: 'Alice', age: 30 }, { id: 42 });
+  assert.equal(sql, 'UPDATE "public"."users" SET "name" = $1, "age" = $2 WHERE "id" = $3;');
+  assert.deepEqual(params, ['Alice', 30, 42]);
+});

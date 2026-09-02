@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { DriverManager } from '../drivers/DriverManager.js';
-import { BaseDriver } from '../drivers/BaseDriver.js';
+import { BaseDriver, ForeignKeyInfo } from '../drivers/BaseDriver.js';
 import { RowWriter, formatTableRef, quoteId, runBound } from '../sql/RowWriter.js';
 import { cursorFrom, keyColumnsFor } from '../sql/Keyset.js';
 import { ConnectionState } from '../drivers/ConnectionState.js';
@@ -10,6 +10,7 @@ import { PageParams, QueryResult } from '../model/QueryTypes.js';
 import { ExportService } from '../export/ExportService.js';
 import { QueryHistoryStorage } from '../storage/QueryHistoryStorage.js';
 import { DestructiveQueryGuard } from '../sql/DestructiveQueryGuard.js';
+import { ExplainWebviewProvider } from './ExplainWebviewProvider.js';
 import { isRussian, t } from '../util/i18n.js';
 
 export class TableWebviewProvider {
@@ -30,14 +31,27 @@ export class TableWebviewProvider {
     const connectionConfig = tableNode.connectionConfig;
     const tableName = tableNode.table.name;
     const schemaName = tableNode.table.schema || (connectionConfig.type === 'PostgreSQL' ? 'public' : (connectionConfig.database || ''));
-    const password = tableNode.password;
-    const sshPassword = tableNode.sshPassword;
+    TableWebviewProvider.openTableDirect(connectionConfig, tableName, schemaName, tableNode.password, tableNode.sshPassword);
+  }
+
+  public static openTableDirect(
+    connectionConfig: ConnectionConfig,
+    tableName: string,
+    schemaName: string,
+    password?: string,
+    sshPassword?: string,
+    initialFilter?: string
+  ) {
     const panelKey = `${connectionConfig.id}_${connectionConfig.database || ''}_${schemaName}_${tableName}`;
 
     const existingPanel = TableWebviewProvider.activePanels.get(panelKey);
     if (existingPanel) {
       existingPanel.reveal(vscode.ViewColumn.One);
-      existingPanel.webview.postMessage({ type: 'refresh' });
+      if (initialFilter) {
+        existingPanel.webview.postMessage({ type: 'applyFilterSql', filterSql: initialFilter });
+      } else {
+        existingPanel.webview.postMessage({ type: 'refresh' });
+      }
       return;
     }
 
@@ -64,6 +78,7 @@ export class TableWebviewProvider {
     let currentParams: PageParams = {
       page: 1,
       pageSize: TableWebviewProvider.lastPageSize,
+      filterSql: initialFilter,
     };
 
     let lastResult: QueryResult | null = null;
@@ -143,6 +158,13 @@ export class TableWebviewProvider {
           } catch (e) {}
         }
 
+        let foreignKeys: ForeignKeyInfo[] = [];
+        try {
+          foreignKeys = await driver.getForeignKeys(tableName, connectionConfig.database, schemaName);
+        } catch (e) {
+          foreignKeys = [];
+        }
+
         const safeResult: QueryResult = {
           ...result,
           fields,
@@ -160,6 +182,7 @@ export class TableWebviewProvider {
             tableName,
             result: safeResult,
             params: currentParams,
+            foreignKeys,
           });
         }
       } catch (err: any) {
@@ -365,6 +388,94 @@ export class TableWebviewProvider {
             vscode.window.showErrorMessage(`${verb} failed: ${e.message}`);
           }
           break;
+        case 'applyStagedChanges': {
+          try {
+            if (connectionConfig.readOnly) {
+              vscode.window.showErrorMessage(
+                t(
+                  `Connection "${connectionConfig.name}" is in Read-Only mode. Write operations are blocked.`,
+                  `Подключение "${connectionConfig.name}" находится в режиме только для чтения. Запись заблокирована.`
+                )
+              );
+              break;
+            }
+            const changes = msg.changes;
+            if (!Array.isArray(changes) || changes.length === 0) break;
+
+            if (DestructiveQueryGuard.isProduction(connectionConfig)) {
+              const applyAction = t('Apply on Production', 'Применить на Production');
+              const confirm = await vscode.window.showWarningMessage(
+                t(
+                  `⚠️ Production Guard: Apply ${changes.length} change(s) in "${tableName}" on "${connectionConfig.name}"?`,
+                  `⚠️ Защита Production: Применить ${changes.length} изм. в "${tableName}" на "${connectionConfig.name}"?`
+                ),
+                { modal: true },
+                applyAction
+              );
+              if (confirm !== applyAction) break;
+            }
+
+            const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
+            if (!driver.supportsRowWrites) {
+              vscode.window.showWarningMessage(
+                t(`Editing rows is not supported for ${dbType}; this view is read-only.`, `Редактирование строк не поддерживается для ${dbType}; просмотр только для чтения.`)
+              );
+              break;
+            }
+
+            const nativeWrites = !driver.supportsSqlWrites;
+            const writer = new RowWriter(driver, dbType, tableRef);
+
+            const byRow = new Map<string, { rowKey: Record<string, any>; updates: Record<string, any> }>();
+            for (const ch of changes) {
+              const keyStr = JSON.stringify(ch.rowKey);
+              if (!byRow.has(keyStr)) {
+                byRow.set(keyStr, { rowKey: ch.rowKey, updates: {} });
+              }
+              byRow.get(keyStr)!.updates[ch.colName] = ch.newVal;
+            }
+
+            for (const { rowKey, updates } of byRow.values()) {
+              if (nativeWrites) {
+                for (const col of Object.keys(updates)) {
+                  await driver.updateRowNative(tableName, rowKey, col, updates[col], schemaName);
+                }
+              } else {
+                await runBound(driver, writer.updateMultiple(updates, rowKey));
+              }
+            }
+
+            vscode.window.showInformationMessage(
+              t(`Saved ${changes.length} change(s) successfully.`, `Успешно сохранено изменений: ${changes.length}.`)
+            );
+            await loadData();
+          } catch (e: any) {
+            vscode.window.showErrorMessage(t(`Batch save failed: ${e.message}`, `Ошибка пакетного сохранения: ${e.message}`));
+          }
+          break;
+        }
+        case 'peekFkRow': {
+          const { reqId, targetTable, targetColumn, value } = msg;
+          try {
+            const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
+            const targetRef = formatTableRef(dbType, targetTable, schemaName, connectionConfig.database);
+            const colRef = quoteId(dbType, targetColumn);
+            const querySql = `SELECT * FROM ${targetRef} WHERE ${colRef} = ? LIMIT 1`;
+            const peekRes = await driver.executeParameterized(querySql, [value]);
+            const row = peekRes.rows && peekRes.rows.length > 0 ? peekRes.rows[0] : null;
+            panel.webview.postMessage({ type: 'peekFkResult', reqId, targetTable, targetColumn, row });
+          } catch (err: any) {
+            panel.webview.postMessage({ type: 'peekFkResult', reqId, targetTable, targetColumn, error: err.message });
+          }
+          break;
+        }
+        case 'openReferencedTable': {
+          const { targetTable, targetColumn, value } = msg;
+          const colRef = quoteId(dbType, targetColumn);
+          const filterSql = typeof value === 'number' ? `${colRef} = ${value}` : `${colRef} = '${String(value).replace(/'/g, "''")}'`;
+          TableWebviewProvider.openTableDirect(connectionConfig, targetTable, schemaName, password, sshPassword, filterSql);
+          break;
+        }
         case 'export':
           if (lastResult) {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
@@ -498,6 +609,11 @@ export class TableWebviewProvider {
             vscode.window.showWarningMessage(t('No query result available to export.', 'Нет результатов запроса для экспорта.'));
           }
           break;
+        case 'explainSql':
+          if (msg.sql && msg.sql.trim()) {
+            await ExplainWebviewProvider.show(connectionConfig, msg.sql, password, sshPassword);
+          }
+          break;
       }
     });
 
@@ -546,6 +662,19 @@ export class TableWebviewProvider {
       nextPage: ru ? 'Следующая страница (PageDown)' : 'Next Page (PageDown)',
       lastPage: ru ? 'Последняя страница (End)' : 'Last Page (End)',
       jumpToPage: ru ? 'Перейти к странице (Enter)' : 'Jump to page (Enter)',
+      stagedChangesCount: ru ? 'Несохраненных изменений:' : 'Staged changes:',
+      applyStaged: ru ? '💾 Сохранить (Ctrl+S)' : '💾 Apply (Ctrl+S)',
+      discardStaged: ru ? '↺ Отменить все' : '↺ Discard All',
+      viewSqlDiff: ru ? '👁 SQL предпросмотр' : '👁 SQL Preview',
+      openFkTable: ru ? 'Открыть таблицу ↗' : 'Open Table ↗',
+      jsonViewerTitle: ru ? 'Древовидный просмотр JSON' : 'JSON Tree Viewer',
+      treeTab: ru ? 'Дерево' : 'Tree View',
+      rawTab: ru ? 'Текст (JSON)' : 'Raw JSON',
+      prettify: ru ? 'Форматировать' : 'Prettify',
+      minify: ru ? 'Сжать' : 'Minify',
+      copyJson: ru ? 'Копировать' : 'Copy',
+      stageChange: ru ? 'Отложить (Stage)' : 'Stage Change',
+      saveImmediate: ru ? 'Сохранить сейчас' : 'Save Immediately',
     };
 
     return `<!DOCTYPE html>
@@ -622,6 +751,121 @@ export class TableWebviewProvider {
     .toolbar input[type="number"]::-webkit-inner-spin-button {
       -webkit-appearance: none;
       margin: 0;
+    }
+    .fk-icon {
+      font-size: 11px;
+      margin-left: 4px;
+      opacity: 0.8;
+      cursor: help;
+    }
+    .fk-badge {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 1px 5px;
+      font-size: 10px;
+      color: #38bdf8;
+      background: rgba(56, 189, 248, 0.15);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      border-radius: 3px;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .fk-badge:hover {
+      background: rgba(56, 189, 248, 0.3);
+      text-decoration: underline;
+    }
+    #fkPopover {
+      display: none;
+      position: fixed;
+      z-index: 1100;
+      background: var(--vscode-editorWidget-background, #252526);
+      border: 1px solid var(--vscode-editorWidget-border, #007acc);
+      border-radius: 6px;
+      padding: 10px 14px;
+      max-width: 360px;
+      max-height: 260px;
+      overflow-y: auto;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+      font-size: 12px;
+    }
+    .staged-modified {
+      background-color: rgba(234, 179, 8, 0.22) !important;
+      border-left: 3px solid #eab308 !important;
+    }
+    #stagedBar {
+      display: none;
+      position: fixed;
+      bottom: 16px;
+      right: 20px;
+      z-index: 999;
+      background: var(--vscode-editorWidget-background, #252526);
+      border: 1px solid #eab308;
+      border-radius: 6px;
+      padding: 8px 16px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      align-items: center;
+      gap: 10px;
+    }
+    .json-badge {
+      display: inline-block;
+      cursor: pointer;
+      background: var(--vscode-badge-background, #333);
+      color: var(--vscode-badge-foreground, #fff);
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-size: 10px;
+      font-family: monospace;
+      margin-left: 5px;
+      font-weight: bold;
+      border: 1px solid #555;
+    }
+    .json-badge:hover {
+      background: var(--vscode-button-background);
+    }
+    .cell-img-thumb {
+      height: 22px;
+      vertical-align: middle;
+      border-radius: 3px;
+      cursor: pointer;
+      border: 1px solid #555;
+      margin-right: 5px;
+    }
+    .cell-img-thumb:hover {
+      transform: scale(1.15);
+      transition: transform 0.15s;
+    }
+    .json-tree {
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 12px;
+      line-height: 1.6;
+      background: var(--vscode-editor-background);
+      padding: 10px;
+      border-radius: 4px;
+      border: 1px solid var(--vscode-input-border, #444);
+      max-height: 400px;
+      overflow: auto;
+    }
+    .json-key { color: #569cd6; font-weight: 600; }
+    .json-str { color: #ce9178; }
+    .json-num { color: #b5cea8; }
+    .json-bool { color: #4ec9b0; }
+    .json-null { color: #808080; font-style: italic; }
+    .json-toggle { cursor: pointer; user-select: none; margin-right: 4px; color: #888; }
+    .img-lightbox {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      z-index: 2000;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+    }
+    .img-lightbox img {
+      max-width: 90vw;
+      max-height: 85vh;
+      border-radius: 6px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.8);
     }
     .table-container {
       flex: 1;
@@ -811,6 +1055,32 @@ export class TableWebviewProvider {
 
   <div id="summaryBar" style="padding: 6px 12px; font-size: 12px; background: var(--vscode-sideBar-background); border: 1px solid var(--vscode-panel-border, #333); border-radius: 4px; margin-top: 6px; display: flex; gap: 16px; flex-wrap: wrap;"></div>
 
+  <!-- Floating FK Peek Popover -->
+  <div id="fkPopover">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; border-bottom: 1px solid var(--vscode-panel-border, #444); padding-bottom: 4px;">
+      <strong id="fkPopoverTitle">🔗 Foreign Key</strong>
+      <div style="display: flex; gap: 6px;">
+        <button id="fkPopoverOpenBtn" class="secondary" style="padding: 2px 8px; font-size: 11px;">${text.openFkTable}</button>
+        <button onclick="closeFkPopover()" style="background: none; border: none; cursor: pointer; color: #888; font-size: 14px; padding: 0 4px;">✕</button>
+      </div>
+    </div>
+    <div id="fkPopoverContent" style="max-height: 180px; overflow-y: auto;"></div>
+  </div>
+
+  <!-- Staged Changes Floating Bar -->
+  <div id="stagedBar">
+    <span id="stagedCountText" style="color: #eab308; font-weight: 600;">🟡 0 changes staged</span>
+    <button id="stagedSaveBtn" style="background: var(--vscode-button-background); color: var(--vscode-button-foreground);">${text.applyStaged}</button>
+    <button id="stagedDiscardBtn" class="secondary">${text.discardStaged}</button>
+    <button id="stagedDiffBtn" class="secondary">${text.viewSqlDiff}</button>
+  </div>
+
+  <!-- Image Lightbox Modal -->
+  <div id="imgLightbox" class="img-lightbox" onclick="closeLightbox()">
+    <img id="lightboxImg" src="" onclick="event.stopPropagation()">
+    <button class="secondary" style="margin-top: 14px;" onclick="closeLightbox()">${text.cancel}</button>
+  </div>
+
   <!-- HTML Modal -->
   <div id="modalOverlay">
     <div class="modal-content">
@@ -835,6 +1105,312 @@ export class TableWebviewProvider {
     let currentSearch = '';
     let searchTimer = null;
     let isChartView = false;
+    let currentForeignKeys = [];
+    let stagedChanges = {};
+    let activePeekReqId = 0;
+
+    function escapeHtml(text) {
+      if (text === null || text === undefined) return '';
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function isImageUrl(val) {
+      if (typeof val !== 'string') return false;
+      if (val.startsWith('data:image/')) return true;
+      const clean = val.split('?')[0].toLowerCase();
+      return clean.endsWith('.png') || clean.endsWith('.jpg') || clean.endsWith('.jpeg') || clean.endsWith('.gif') || clean.endsWith('.webp') || clean.endsWith('.svg');
+    }
+
+    function showFkPeek(anchorEl, targetTable, targetColumn, val) {
+      const popover = document.getElementById('fkPopover');
+      const title = document.getElementById('fkPopoverTitle');
+      const content = document.getElementById('fkPopoverContent');
+      const openBtn = document.getElementById('fkPopoverOpenBtn');
+
+      title.textContent = '🔗 ' + targetTable + ' (' + targetColumn + ' = ' + val + ')';
+      content.innerHTML = '<div style="padding:10px; color:#888;">⏳ Loading...</div>';
+
+      openBtn.onclick = () => {
+        vscode.postMessage({ type: 'openReferencedTable', targetTable, targetColumn, value: val });
+        closeFkPopover();
+      };
+
+      const rect = anchorEl.getBoundingClientRect();
+      popover.style.display = 'block';
+      popover.style.top = Math.min(window.innerHeight - 270, rect.bottom + 6) + 'px';
+      popover.style.left = Math.min(window.innerWidth - 370, Math.max(10, rect.left - 50)) + 'px';
+
+      activePeekReqId++;
+      vscode.postMessage({
+        type: 'peekFkRow',
+        reqId: activePeekReqId,
+        targetTable,
+        targetColumn,
+        value: val,
+      });
+    }
+
+    function closeFkPopover() {
+      const popover = document.getElementById('fkPopover');
+      if (popover) popover.style.display = 'none';
+    }
+
+    document.addEventListener('click', (e) => {
+      const popover = document.getElementById('fkPopover');
+      if (popover && popover.style.display !== 'none' && !popover.contains(e.target) && !e.target.classList.contains('fk-badge')) {
+        popover.style.display = 'none';
+      }
+    });
+
+    function updateStagedBar() {
+      const bar = document.getElementById('stagedBar');
+      const textEl = document.getElementById('stagedCountText');
+      const count = Object.keys(stagedChanges).length;
+      if (count > 0) {
+        bar.style.display = 'flex';
+        textEl.textContent = '🟡 ' + count + ' ' + (count === 1 ? '${ru ? "изменение" : "change"}' : '${ru ? "изменений" : "changes"}');
+      } else {
+        bar.style.display = 'none';
+      }
+    }
+
+    document.getElementById('stagedSaveBtn').onclick = () => {
+      const list = Object.values(stagedChanges);
+      if (list.length === 0) return;
+      vscode.postMessage({ type: 'applyStagedChanges', changes: list });
+      stagedChanges = {};
+      updateStagedBar();
+    };
+
+    document.getElementById('stagedDiscardBtn').onclick = () => {
+      stagedChanges = {};
+      updateStagedBar();
+      renderRows(allRows);
+    };
+
+    document.getElementById('stagedDiffBtn').onclick = () => {
+      const list = Object.values(stagedChanges);
+      const diffWrap = document.createElement('div');
+      const pre = document.createElement('pre');
+      pre.style.background = 'var(--vscode-editor-background)';
+      pre.style.padding = '10px';
+      pre.style.borderRadius = '4px';
+      pre.style.maxHeight = '300px';
+      pre.style.overflow = 'auto';
+      pre.style.fontSize = '12px';
+      pre.textContent = list.map(c => {
+        const where = Object.keys(c.rowKey).map(k => k + ' = ' + JSON.stringify(c.rowKey[k])).join(' AND ');
+        return 'UPDATE "' + tableName + '" SET "' + c.colName + '" = ' + JSON.stringify(c.newVal) + ' WHERE ' + where + ';';
+      }).join('\\n');
+      diffWrap.appendChild(pre);
+      openModal('${text.viewSqlDiff}', diffWrap, () => {
+        document.getElementById('stagedSaveBtn').click();
+      });
+    };
+
+    function openLightbox(url) {
+      const box = document.getElementById('imgLightbox');
+      const img = document.getElementById('lightboxImg');
+      if (box && img) {
+        img.src = url;
+        box.style.display = 'flex';
+      }
+    }
+
+    function closeLightbox() {
+      const box = document.getElementById('imgLightbox');
+      if (box) box.style.display = 'none';
+    }
+
+    function buildJsonTree(val) {
+      if (val === null) {
+        const span = document.createElement('span');
+        span.className = 'json-null';
+        span.textContent = 'null';
+        return span;
+      }
+      if (typeof val === 'boolean') {
+        const span = document.createElement('span');
+        span.className = 'json-bool';
+        span.textContent = String(val);
+        return span;
+      }
+      if (typeof val === 'number') {
+        const span = document.createElement('span');
+        span.className = 'json-num';
+        span.textContent = String(val);
+        return span;
+      }
+      if (typeof val === 'string') {
+        const span = document.createElement('span');
+        span.className = 'json-str';
+        span.textContent = JSON.stringify(val);
+        return span;
+      }
+      if (Array.isArray(val)) {
+        const container = document.createElement('div');
+        const header = document.createElement('span');
+        header.className = 'json-toggle';
+        header.textContent = '▼ [ ' + val.length + ' items ]';
+        const children = document.createElement('div');
+        children.style.paddingLeft = '16px';
+        header.onclick = () => {
+          const closed = children.style.display === 'none';
+          children.style.display = closed ? 'block' : 'none';
+          header.textContent = (closed ? '▼' : '▶') + ' [ ' + val.length + ' items ]';
+        };
+        val.forEach((item, idx) => {
+          const row = document.createElement('div');
+          const idxSpan = document.createElement('span');
+          idxSpan.className = 'json-key';
+          idxSpan.textContent = idx + ': ';
+          row.appendChild(idxSpan);
+          row.appendChild(buildJsonTree(item));
+          children.appendChild(row);
+        });
+        container.appendChild(header);
+        container.appendChild(children);
+        return container;
+      }
+      if (typeof val === 'object') {
+        const container = document.createElement('div');
+        const keys = Object.keys(val);
+        const header = document.createElement('span');
+        header.className = 'json-toggle';
+        header.textContent = '▼ { ' + keys.length + ' keys }';
+        const children = document.createElement('div');
+        children.style.paddingLeft = '16px';
+        header.onclick = () => {
+          const closed = children.style.display === 'none';
+          children.style.display = closed ? 'block' : 'none';
+          header.textContent = (closed ? '▼' : '▶') + ' { ' + keys.length + ' keys }';
+        };
+        keys.forEach(k => {
+          const row = document.createElement('div');
+          const keySpan = document.createElement('span');
+          keySpan.className = 'json-key';
+          keySpan.textContent = '"' + k + '": ';
+          row.appendChild(keySpan);
+          row.appendChild(buildJsonTree(val[k]));
+          children.appendChild(row);
+        });
+        container.appendChild(header);
+        container.appendChild(children);
+        return container;
+      }
+      const span = document.createElement('span');
+      span.textContent = String(val);
+      return span;
+    }
+
+    function openJsonViewer(colName, rowKey, jsonObj, rawStr) {
+      const wrap = document.createElement('div');
+      
+      const tabHeader = document.createElement('div');
+      tabHeader.style.display = 'flex';
+      tabHeader.style.gap = '8px';
+      tabHeader.style.marginBottom = '12px';
+
+      const treeTabBtn = document.createElement('button');
+      treeTabBtn.textContent = '${text.treeTab}';
+      treeTabBtn.className = 'primary';
+      treeTabBtn.type = 'button';
+
+      const rawTabBtn = document.createElement('button');
+      rawTabBtn.textContent = '${text.rawTab}';
+      rawTabBtn.className = 'secondary';
+      rawTabBtn.type = 'button';
+
+      const copyBtn = document.createElement('button');
+      copyBtn.textContent = '${text.copyJson}';
+      copyBtn.className = 'secondary';
+      copyBtn.type = 'button';
+      copyBtn.onclick = () => {
+        navigator.clipboard.writeText(JSON.stringify(jsonObj, null, 2));
+        copyBtn.textContent = '✓ Copied';
+        setTimeout(() => { copyBtn.textContent = '${text.copyJson}'; }, 1500);
+      };
+
+      tabHeader.appendChild(treeTabBtn);
+      tabHeader.appendChild(rawTabBtn);
+      tabHeader.appendChild(copyBtn);
+      wrap.appendChild(tabHeader);
+
+      const treeView = document.createElement('div');
+      treeView.className = 'json-tree';
+      treeView.appendChild(buildJsonTree(jsonObj));
+
+      const rawView = document.createElement('div');
+      rawView.style.display = 'none';
+
+      const rawActions = document.createElement('div');
+      rawActions.style.display = 'flex';
+      rawActions.style.gap = '8px';
+      rawActions.style.marginBottom = '8px';
+
+      const prettifyBtn = document.createElement('button');
+      prettifyBtn.textContent = '${text.prettify}';
+      prettifyBtn.className = 'secondary';
+      prettifyBtn.type = 'button';
+
+      const minifyBtn = document.createElement('button');
+      minifyBtn.textContent = '${text.minify}';
+      minifyBtn.className = 'secondary';
+      minifyBtn.type = 'button';
+
+      const textarea = document.createElement('textarea');
+      textarea.style.width = '100%';
+      textarea.style.height = '300px';
+      textarea.style.fontFamily = 'monospace';
+      textarea.value = JSON.stringify(jsonObj, null, 2);
+
+      prettifyBtn.onclick = () => {
+        try { textarea.value = JSON.stringify(JSON.parse(textarea.value), null, 2); } catch (e) {}
+      };
+      minifyBtn.onclick = () => {
+        try { textarea.value = JSON.stringify(JSON.parse(textarea.value)); } catch (e) {}
+      };
+
+      rawActions.appendChild(prettifyBtn);
+      rawActions.appendChild(minifyBtn);
+      rawView.appendChild(rawActions);
+      rawView.appendChild(textarea);
+
+      treeTabBtn.onclick = () => {
+        treeView.style.display = 'block';
+        rawView.style.display = 'none';
+        treeTabBtn.className = 'primary';
+        rawTabBtn.className = 'secondary';
+      };
+      rawTabBtn.onclick = () => {
+        treeView.style.display = 'none';
+        rawView.style.display = 'block';
+        rawTabBtn.className = 'primary';
+        treeTabBtn.className = 'secondary';
+      };
+
+      wrap.appendChild(treeView);
+      wrap.appendChild(rawView);
+
+      openModal('${text.jsonViewerTitle}: ' + colName, wrap, () => {
+        if (rowKey) {
+          try {
+            const parsed = JSON.parse(textarea.value);
+            const stageKey = JSON.stringify(rowKey) + '::' + colName;
+            stagedChanges[stageKey] = { colName, rowKey, newVal: textarea.value, oldVal: rawStr };
+            renderRows(allRows);
+            updateStagedBar();
+          } catch (e) {
+            alert('Invalid JSON: ' + e.message);
+          }
+        }
+      });
+    }
 
     function toggleSort(fieldName) {
       if (currentSortField === fieldName) {
@@ -1102,6 +1678,26 @@ export class TableWebviewProvider {
       nullWrap.appendChild(nullLabel);
       wrap.appendChild(nullWrap);
 
+      const btnRow = document.createElement('div');
+      btnRow.style.display = 'flex';
+      btnRow.style.gap = '8px';
+      btnRow.style.marginTop = '12px';
+
+      const stageBtn = document.createElement('button');
+      stageBtn.textContent = '${text.stageChange}';
+      stageBtn.className = 'primary';
+      stageBtn.type = 'button';
+      stageBtn.onclick = () => {
+        const newVal = nullBox.checked ? null : textarea.value;
+        const stageKey = JSON.stringify(rowKey) + '::' + colName;
+        stagedChanges[stageKey] = { colName, rowKey, newVal, oldVal: currentVal };
+        closeModal();
+        renderRows(allRows);
+        updateStagedBar();
+      };
+      btnRow.appendChild(stageBtn);
+      wrap.appendChild(btnRow);
+
       openModal('${ru ? 'Редактировать ячейку' : 'Edit Cell'}: ' + colName, wrap, () => {
         vscode.postMessage({
           type: 'updateCell',
@@ -1171,17 +1767,79 @@ export class TableWebviewProvider {
             if (matchKey) val = row[matchKey];
           }
 
-          if (val === null || val === undefined) {
+          const stageKey = rowKey ? (JSON.stringify(rowKey) + '::' + f.name) : null;
+          const isStaged = stageKey && stagedChanges[stageKey] !== undefined;
+          const displayVal = isStaged ? stagedChanges[stageKey].newVal : val;
+
+          if (displayVal === null || displayVal === undefined) {
             const i = document.createElement('i');
             i.textContent = 'null';
             td.appendChild(i);
           } else {
-            td.textContent = typeof val === 'object' ? JSON.stringify(val) : String(val);
+            td.textContent = typeof displayVal === 'object' ? JSON.stringify(displayVal) : String(displayVal);
           }
+
+          if (isStaged) {
+            td.classList.add('staged-modified');
+            td.title = 'Staged: ' + stagedChanges[stageKey].oldVal + ' -> ' + stagedChanges[stageKey].newVal;
+          }
+
+          // Foreign key badge
+          const fk = currentForeignKeys.find(k => k.columnName && k.columnName.toLowerCase() === f.name.toLowerCase());
+          if (fk && val !== null && val !== undefined) {
+            const fkBadge = document.createElement('span');
+            fkBadge.className = 'fk-badge';
+            fkBadge.textContent = '🔗 ' + fk.referencedTable;
+            fkBadge.title = 'FK -> ' + fk.referencedTable + '.' + fk.referencedColumn + ' (Click to peek)';
+            fkBadge.onclick = (e) => {
+              e.stopPropagation();
+              showFkPeek(fkBadge, fk.referencedTable, fk.referencedColumn, val);
+            };
+            td.appendChild(fkBadge);
+          }
+
+          // JSON badge
+          const strVal = typeof val === 'object' ? JSON.stringify(val) : String(val);
+          let isJson = false;
+          let parsedJson = null;
+          if (typeof val === 'object' && val !== null) {
+            isJson = true;
+            parsedJson = val;
+          } else if (typeof val === 'string' && (val.startsWith('{') || val.startsWith('['))) {
+            try {
+              parsedJson = JSON.parse(val);
+              isJson = true;
+            } catch (e) {}
+          }
+          if (isJson) {
+            const jsonBadge = document.createElement('span');
+            jsonBadge.className = 'json-badge';
+            jsonBadge.textContent = '{ } JSON';
+            jsonBadge.title = 'Open JSON Tree Viewer';
+            jsonBadge.onclick = (e) => {
+              e.stopPropagation();
+              openJsonViewer(f.name, rowKey, parsedJson, strVal);
+            };
+            td.appendChild(jsonBadge);
+          }
+
+          // Image thumbnail
+          if (isImageUrl(val)) {
+            const thumb = document.createElement('img');
+            thumb.src = val;
+            thumb.className = 'cell-img-thumb';
+            thumb.title = 'Click to zoom';
+            thumb.onclick = (e) => {
+              e.stopPropagation();
+              openLightbox(val);
+            };
+            td.insertBefore(thumb, td.firstChild);
+          }
+
           if (editable) {
-            td.className = 'editable';
+            td.className = 'editable' + (isStaged ? ' staged-modified' : '');
             td.onclick = () => {
-              const valStr = val === null || val === undefined ? 'null' : (typeof val === 'object' ? JSON.stringify(val) : String(val));
+              const valStr = displayVal === null || displayVal === undefined ? 'null' : (typeof displayVal === 'object' ? JSON.stringify(displayVal) : String(displayVal));
               editCell(f.name, rowKey, valStr);
             };
           } else {
@@ -1220,6 +1878,52 @@ export class TableWebviewProvider {
         return;
       }
 
+      if (msg.type === 'peekFkResult') {
+        const content = document.getElementById('fkPopoverContent');
+        if (!content) return;
+        if (msg.error) {
+          content.innerHTML = '<div style="color:#f87171; padding:6px;">❌ ' + escapeHtml(msg.error) + '</div>';
+        } else if (!msg.row) {
+          content.innerHTML = '<div style="color:#888; font-style:italic; padding:6px;">${ru ? "Связанная запись не найдена." : "No matching record found."}</div>';
+        } else {
+          content.innerHTML = '';
+          const table = document.createElement('table');
+          table.style.width = '100%';
+          table.style.fontSize = '11px';
+          for (const k of Object.keys(msg.row)) {
+            const tr = document.createElement('tr');
+            const th = document.createElement('td');
+            th.style.fontWeight = 'bold';
+            th.style.color = '#38bdf8';
+            th.style.width = '35%';
+            th.style.padding = '2px 4px';
+            th.textContent = k;
+            const td = document.createElement('td');
+            td.style.padding = '2px 4px';
+            td.textContent = String(msg.row[k]);
+            tr.appendChild(th);
+            tr.appendChild(td);
+            table.appendChild(tr);
+          }
+          content.appendChild(table);
+        }
+        return;
+      }
+
+      if (msg.type === 'applyFilterSql') {
+        const filterInput = document.getElementById('sqlFilterInput');
+        if (filterInput) filterInput.value = msg.filterSql;
+        vscode.postMessage({
+          type: 'fetchData',
+          params: {
+            page: 1,
+            pageSize,
+            filterSql: msg.filterSql,
+          }
+        });
+        return;
+      }
+
       if (msg.type === 'error') {
         errorBox.style.display = 'flex';
         errorBox.textContent = '';
@@ -1251,6 +1955,7 @@ export class TableWebviewProvider {
           document.getElementById('pageSizeSelect').value = String(pageSize);
         }
         currentFields = (res.fields && res.fields.length > 0) ? res.fields : [];
+        currentForeignKeys = msg.foreignKeys || [];
         allRows = res.rows || [];
         if (currentFields.length === 0 && allRows.length > 0) {
           currentFields = Object.keys(allRows[0]).map(k => ({ name: k, type: 'VARCHAR', nullable: true }));
@@ -1298,8 +2003,9 @@ export class TableWebviewProvider {
             th.classList.add('sorted');
             sortIcon = currentSortOrder === 'ASC' ? '▲' : '▼';
           }
-          th.title = (f.type ? f.type + ' — ' : '') + sortTitlePrefix + ' ' + f.name;
-          th.textContent = f.name + (f.isPrimaryKey ? ' 🔑' : '') + ' ';
+          const isFk = currentForeignKeys.some(k => k.columnName && k.columnName.toLowerCase() === f.name.toLowerCase());
+          th.title = (f.type ? f.type + ' — ' : '') + sortTitlePrefix + ' ' + f.name + (isFk ? ' (Foreign Key)' : '');
+          th.textContent = f.name + (f.isPrimaryKey ? ' 🔑' : '') + (isFk ? ' 🔗' : '') + ' ';
           const iconSpan = document.createElement('span');
           iconSpan.className = 'sort-icon';
           iconSpan.textContent = sortIcon;
@@ -1572,6 +2278,14 @@ export class TableWebviewProvider {
     }
 
     window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        if (Object.keys(stagedChanges).length > 0) {
+          e.preventDefault();
+          document.getElementById('stagedSaveBtn').click();
+          return;
+        }
+      }
+
       const active = document.activeElement;
       const tag = active ? active.tagName.toLowerCase() : '';
       if (tag === 'input' || tag === 'textarea' || tag === 'select') {
@@ -1610,6 +2324,7 @@ export class TableWebviewProvider {
       title: ru ? '⚡ SQL Консоль Запросов' : '⚡ SQL Query Console',
       ph: ru ? 'Введите SQL-запрос (например, SELECT * FROM users LIMIT 10;)' : 'Enter SQL query here (e.g. SELECT * FROM users LIMIT 10;)',
       run: ru ? '▶ Выполнить (Ctrl+Enter)' : '▶ Run Query (Ctrl+Enter)',
+      explain: ru ? '⚡ План (Alt+X)' : '⚡ Explain (Alt+X)',
       cancel2: ru ? '■ Отменить' : '■ Cancel',
       running: ru ? 'Выполняется...' : 'Running...',
       export: ru ? 'Экспорт:' : 'Export:',
@@ -1705,6 +2420,7 @@ export class TableWebviewProvider {
   <textarea id="sqlInput" placeholder="${text.ph}">${TableWebviewProvider.escapeHtml(initialSql || 'SELECT 1;')}</textarea>
   <div class="actions">
     <button id="runBtn">${text.run}</button>
+    <button id="explainBtn" class="secondary" title="Explain Plan (Alt+X)">${text.explain}</button>
     <button id="cancelBtn" class="danger" style="display:none;">${text.cancel2}</button>
 
     <span style="border-left: 1px solid #555; margin: 0 5px; height: 18px;"></span>
@@ -1731,11 +2447,17 @@ export class TableWebviewProvider {
     const vscode = acquireVsCodeApi();
 
     const runBtn = document.getElementById('runBtn');
+    const explainBtn = document.getElementById('explainBtn');
     const cancelBtn = document.getElementById('cancelBtn');
 
     function run() {
       const sql = document.getElementById('sqlInput').value;
       vscode.postMessage({ type: 'executeSql', sql });
+    }
+
+    function explain() {
+      const sql = document.getElementById('sqlInput').value;
+      vscode.postMessage({ type: 'explainSql', sql });
     }
 
     cancelBtn.onclick = () => {
@@ -1748,9 +2470,15 @@ export class TableWebviewProvider {
     }
 
     document.getElementById('runBtn').onclick = run;
+    if (explainBtn) explainBtn.onclick = explain;
+
     document.getElementById('sqlInput').addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
         run();
+      } else if (e.altKey && (e.key.toLowerCase() === 'x' || e.key.toLowerCase() === 'e')) {
+        e.preventDefault();
+        explain();
       }
     });
 

@@ -25,7 +25,7 @@ esbuild
     sourcemap: 'inline',
     logLevel: 'warning',
     alias: { vscode: path.join(testDir, 'stubs', 'vscode.js') },
-    external: ['esbuild', 'pg-native', 'cardinal', 'cpu-features'],
+    external: ['esbuild', 'pg-native', 'cardinal', 'cpu-features', 'duckdb'],
   })
   .then(() => {
     // node-sqlite3-wasm resolves its engine from __dirname, which for the test

@@ -34,5 +34,7 @@
   "command.runQueryFile": "运行 SQL 脚本",
   "command.queryHistory": "查询历史",
   "command.querySnippets": "已保存的 SQL 片段",
-  "command.importData": "导入数据 (CSV / Excel)..."
+  "command.importData": "导入数据 (CSV / Excel)...",
+  "command.runActiveQuery": "运行 SQL 查询",
+  "command.chooseEditorConnection": "切换编辑器数据库连接"
 }

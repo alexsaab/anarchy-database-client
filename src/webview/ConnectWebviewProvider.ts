@@ -268,6 +268,7 @@ export class ConnectWebviewProvider {
       <option value="CouchDB">Apache CouchDB</option>
       <option value="Couchbase">Couchbase</option>
       <option value="Firestore">Firebase Firestore</option>
+      <option value="DuckDB">DuckDB (Local Parquet, CSV, DuckDB)</option>
     </select>
   </div>
 
@@ -411,7 +412,7 @@ export class ConnectWebviewProvider {
       const standard = document.getElementById('standardFields');
       const sqlite = document.getElementById('sqliteFields');
 
-      if (type === 'SQLite') {
+      if (type === 'SQLite' || type === 'DuckDB') {
         standard.style.display = 'none';
         sqlite.style.display = 'block';
       } else {

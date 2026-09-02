@@ -171,7 +171,17 @@
       {
         "command": "dbClient.explainQuery",
         "title": "%command.explainQuery%",
-        "icon": "$(graph)"
+        "icon": "$(zap)"
+      },
+      {
+        "command": "dbClient.runActiveQuery",
+        "title": "%command.runActiveQuery%",
+        "icon": "$(play)"
+      },
+      {
+        "command": "dbClient.chooseEditorConnection",
+        "title": "%command.chooseEditorConnection%",
+        "icon": "$(database)"
       },
       {
         "command": "dbClient.openRedisEditor",
@@ -393,8 +403,56 @@
           "when": "view == database-client-explorer && viewItem == tableNode",
           "group": "1_data@1"
         }
+      ],
+      "editor/context": [
+        {
+          "command": "dbClient.runActiveQuery",
+          "when": "editorLangId == 'sql'",
+          "group": "1_anarchy_query@1"
+        },
+        {
+          "command": "dbClient.explainQuery",
+          "when": "editorLangId == 'sql'",
+          "group": "1_anarchy_query@2"
+        },
+        {
+          "command": "dbClient.chooseEditorConnection",
+          "when": "editorLangId == 'sql'",
+          "group": "1_anarchy_query@3"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "dbClient.runActiveQuery",
+          "when": "editorLangId == 'sql'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dbClient.explainQuery",
+          "when": "editorLangId == 'sql'",
+          "group": "navigation@2"
+        }
       ]
-    }
+    },
+    "keybindings": [
+      {
+        "command": "dbClient.runActiveQuery",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorTextFocus && editorLangId == 'sql'"
+      },
+      {
+        "command": "dbClient.runActiveQuery",
+        "key": "f5",
+        "when": "editorTextFocus && editorLangId == 'sql'"
+      },
+      {
+        "command": "dbClient.explainQuery",
+        "key": "alt+x",
+        "mac": "alt+x",
+        "when": "editorTextFocus && editorLangId == 'sql'"
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run build",
@@ -416,6 +474,7 @@
   "dependencies": {
     "@clickhouse/client": "^1.11.0",
     "@elastic/elasticsearch": "^8.12.0",
+    "duckdb": "^1.4.4",
     "exceljs": "^4.4.0",
     "ioredis": "^5.3.2",
     "mongodb": "^6.3.0",

@@ -34,5 +34,7 @@
   "command.runQueryFile": "SQL-Skript ausführen",
   "command.queryHistory": "Abfrageverlauf",
   "command.querySnippets": "Gespeicherte SQL-Snippets",
-  "command.importData": "Daten importieren (CSV / Excel)..."
+  "command.importData": "Daten importieren (CSV / Excel)...",
+  "command.runActiveQuery": "SQL-Abfrage ausführen",
+  "command.chooseEditorConnection": "Editor-Datenbankverbindung wechseln"
 }

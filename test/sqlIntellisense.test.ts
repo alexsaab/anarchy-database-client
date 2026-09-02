@@ -95,6 +95,14 @@ test('SqlCompletionProvider suggests foreign key ON joins', () => {
   assert.ok(items.some((i) => i.label === 'orders.user_id = users.id'));
 });
 
+test('SqlCompletionProvider suggests smart JOIN table and ON clause immediately after JOIN keyword', () => {
+  const provider = new SqlCompletionProvider();
+  const doc = createMockDoc('SELECT * FROM users JOIN ', 0, 25);
+  const items = provider.provideCompletionItems(doc as any, { line: 0, character: 25 } as any, {} as any, {} as any) as any[];
+
+  assert.ok(items.some((i) => i.label === 'orders ON orders.user_id = users.id'));
+});
+
 test('SqlHoverProvider displays table column schema info on hover', () => {
   const hoverProvider = new SqlHoverProvider();
   const doc = {

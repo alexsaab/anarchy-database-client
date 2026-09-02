@@ -6,7 +6,7 @@
 // conditionally. Anything else MUST be bundled -- the packaged extension ships
 // no node_modules, so an external dependency is simply missing at runtime.
 module.exports = {
-  external: ['vscode', 'pg-native', 'cardinal', 'cpu-features'],
+  external: ['vscode', 'pg-native', 'cardinal', 'cpu-features', 'duckdb'],
   // Modules the drivers require() at runtime; all must be reachable from the bundle.
   runtimeModules: [
     '@elastic/elasticsearch',

@@ -172,9 +172,19 @@ export class SqlScriptRunner {
       vscode.window.showErrorMessage(`Could not read ${filePath}: ${e.message}`);
       return;
     }
+    return SqlScriptRunner.runScript(script, connectionConfig, password, sshPassword, path.basename(filePath), false);
+  }
 
+  public static async runScript(
+    script: string,
+    connectionConfig: ConnectionConfig,
+    password?: string,
+    sshPassword?: string,
+    titleName: string = 'SQL',
+    skipConfirmIfSingle: boolean = false
+  ): Promise<void> {
     const statements = SqlScriptRunner.split(script);
-    const fileName = path.basename(filePath);
+    const fileName = titleName;
 
     if (statements.length === 0) {
       vscode.window.showWarningMessage(t(`${fileName} contains no SQL statements.`, `В ${fileName} нет SQL-запросов.`));
@@ -216,17 +226,19 @@ export class SqlScriptRunner {
     }
 
     const target = `${connectionConfig.name}${connectionConfig.database ? ` / ${connectionConfig.database}` : ''}`;
-    const run = t('Run', 'Выполнить');
-    const confirm = await vscode.window.showWarningMessage(
-      t(
-        `Run ${statements.length} statement(s) from "${fileName}" against ${target}?`,
-        `Выполнить ${statements.length} запрос(ов) из "${fileName}" в ${target}?`
-      ),
-      { modal: true },
-      run
-    );
-    if (confirm !== run) {
-      return;
+    if (!skipConfirmIfSingle || statements.length > 1) {
+      const run = t('Run', 'Выполнить');
+      const confirm = await vscode.window.showWarningMessage(
+        t(
+          `Run ${statements.length} statement(s) from "${fileName}" against ${target}?`,
+          `Выполнить ${statements.length} запрос(ов) из "${fileName}" в ${target}?`
+        ),
+        { modal: true },
+        run
+      );
+      if (confirm !== run) {
+        return;
+      }
     }
 
     const log = SqlScriptRunner.log();

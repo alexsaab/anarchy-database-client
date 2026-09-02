@@ -36,5 +36,7 @@
   "command.runQueryFile": "Выполнить SQL-скрипт",
   "command.queryHistory": "История запросов",
   "command.querySnippets": "Сохранённые сниппеты",
-  "command.importData": "Импорт данных (CSV / Excel)..."
+  "command.importData": "Импорт данных (CSV / Excel)...",
+  "command.runActiveQuery": "Выполнить SQL-запрос",
+  "command.chooseEditorConnection": "Сменить подключение для редактора"
 }

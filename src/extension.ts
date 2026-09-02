@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { ConnectionStorageService } from './storage/ConnectionStorage.js';
+import { ConnectionConfig } from './model/ConnectionConfig.js';
 import { DatabaseTreeProvider } from './tree/DatabaseTreeProvider.js';
 import { ConnectionNode } from './tree/ConnectionNode.js';
 import { DatabaseNode } from './tree/DatabaseNode.js';
@@ -668,28 +670,139 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  const activeEditorConnections = new Map<string, string>();
+
+  const resolveTargetConnection = async (
+    editor: vscode.TextEditor,
+    explicitNode?: ConnectionNode | DatabaseNode
+  ): Promise<{ config: ConnectionConfig; pass?: string; sshPass?: string } | undefined> => {
+    let config = explicitNode ? ((explicitNode as DatabaseNode).connectionConfig || (explicitNode as ConnectionNode).config) : undefined;
+    let pass = explicitNode ? (explicitNode as ConnectionNode).password : undefined;
+    let sshPass = explicitNode ? (explicitNode as ConnectionNode).sshPassword : undefined;
+
+    if (config) {
+      if (!pass) pass = await storageService.getPassword(config.id);
+      if (!sshPass) sshPass = await storageService.getSshPassword(config.id);
+      return { config, pass, sshPass };
+    }
+
+    const docUri = editor.document.uri.toString();
+    const connections = storageService.getConnections();
+    if (connections.length === 0) {
+      vscode.window.showWarningMessage(
+        t('No database connections configured. Please add a connection first.', 'Подключения не найдены. Пожалуйста, сначала добавьте подключение.')
+      );
+      return undefined;
+    }
+
+    const trackedId = activeEditorConnections.get(docUri);
+    let target = trackedId ? connections.find((c) => c.id === trackedId) : undefined;
+
+    if (!target) {
+      if (connections.length === 1) {
+        target = connections[0];
+        activeEditorConnections.set(docUri, target.id);
+      } else {
+        const items = connections.map((c) => ({
+          label: `$(database) ${c.name}`,
+          description: `${c.type} — ${c.database || c.dbPath || c.host || ''}`,
+          connection: c,
+        }));
+        const picked = await vscode.window.showQuickPick(items, {
+          placeHolder: t('Select database connection to execute query on', 'Выберите подключение к БД для выполнения запроса'),
+        });
+        if (!picked) return undefined;
+        target = picked.connection;
+        activeEditorConnections.set(docUri, target.id);
+      }
+    }
+
+    pass = await storageService.getPassword(target.id);
+    sshPass = await storageService.getSshPassword(target.id);
+    return { config: target, pass, sshPass };
+  };
+
+  const getSqlToExecute = (editor: vscode.TextEditor): string => {
+    if (!editor.selection.isEmpty) {
+      return editor.document.getText(editor.selection).trim();
+    }
+    const fullText = editor.document.getText();
+    const statements = SqlScriptRunner.split(fullText);
+    if (statements.length <= 1) {
+      return fullText.trim();
+    }
+    const cursorLine = editor.selection.active.line + 1;
+    let target = statements[0];
+    for (let i = 0; i < statements.length; i++) {
+      const s = statements[i];
+      const nextLine = i + 1 < statements.length ? statements[i + 1].line : Infinity;
+      if (cursorLine >= s.line && cursorLine < nextLine) {
+        target = s;
+        break;
+      }
+    }
+    return target.sql.trim();
+  };
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.runActiveQuery', async (node?: ConnectionNode | DatabaseNode) => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) return;
+      const sql = getSqlToExecute(editor);
+      if (!sql) {
+        vscode.window.showInformationMessage(t('No SQL query to execute.', 'Нет SQL-запроса для выполнения.'));
+        return;
+      }
+      const target = await resolveTargetConnection(editor, node);
+      if (!target) return;
+      await SqlScriptRunner.runScript(
+        sql,
+        target.config,
+        target.pass,
+        target.sshPass,
+        path.basename(editor.document.fileName) || 'Query',
+        true
+      );
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.chooseEditorConnection', async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) return;
+      const docUri = editor.document.uri.toString();
+      const connections = storageService.getConnections();
+      if (connections.length === 0) return;
+      const items = connections.map((c) => ({
+        label: `$(database) ${c.name}`,
+        description: `${c.type} — ${c.database || c.dbPath || c.host || ''}`,
+        connection: c,
+      }));
+      const picked = await vscode.window.showQuickPick(items, {
+        placeHolder: t('Switch database connection for this editor', 'Сменить подключение к БД для этого редактора'),
+      });
+      if (picked) {
+        activeEditorConnections.set(docUri, picked.connection.id);
+        vscode.window.showInformationMessage(
+          t(`Connected "${path.basename(editor.document.fileName)}" to ${picked.connection.name}`,
+            `Файл "${path.basename(editor.document.fileName)}" привязан к ${picked.connection.name}`)
+        );
+      }
+    })
+  );
+
   context.subscriptions.push(
     vscode.commands.registerCommand('dbClient.explainQuery', async (node?: ConnectionNode | DatabaseNode) => {
       const editor = vscode.window.activeTextEditor;
       if (!editor) return;
-      const sql = editor.selection.isEmpty ? editor.document.getText() : editor.document.getText(editor.selection);
-      if (!sql.trim()) return;
-
-      let config = node ? (node as DatabaseNode).connectionConfig || (node as ConnectionNode).config : undefined;
-      let pass = node ? (node as ConnectionNode).password : undefined;
-      let sshPass = node ? (node as ConnectionNode).sshPassword : undefined;
-
-      if (!config) {
-        const connections = storageService.getConnections();
-        if (connections.length > 0) {
-          config = connections[0];
-          pass = await storageService.getPassword(config.id);
-          sshPass = await storageService.getSshPassword(config.id);
-        }
+      const sql = getSqlToExecute(editor);
+      if (!sql) {
+        vscode.window.showInformationMessage(t('No SQL query to explain.', 'Нет SQL-запроса для анализа.'));
+        return;
       }
-      if (config) {
-        await ExplainWebviewProvider.show(config, sql, pass, sshPass);
-      }
+      const target = await resolveTargetConnection(editor, node);
+      if (!target) return;
+      await ExplainWebviewProvider.show(target.config, sql, target.pass, target.sshPass);
     })
   );
 

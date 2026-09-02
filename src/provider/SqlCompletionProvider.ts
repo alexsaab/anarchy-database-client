@@ -60,6 +60,55 @@ export class SqlCompletionProvider implements vscode.CompletionItemProvider {
       }
     }
 
+    // Check if user is typing after `JOIN` (e.g. `SELECT * FROM users JOIN `)
+    const joinMatch = linePrefix.match(/(?:inner\s+|left\s+|right\s+|full\s+)?join\s*$/i);
+    if (joinMatch && metadata) {
+      const docText = document.getText();
+      const fromMatches = Array.from(docText.matchAll(/(?:from|join)\s+([a-zA-Z0-9_]+)(?:\s+(?:as\s+)?([a-zA-Z0-9_]+))?/gi));
+      const activeTables = new Map<string, string>();
+      for (const m of fromMatches) {
+        const tbl = m[1].toLowerCase();
+        const alias = m[2] && !['where', 'join', 'inner', 'left', 'right', 'full', 'on', 'group', 'order', 'limit'].includes(m[2].toLowerCase())
+          ? m[2]
+          : m[1];
+        if (metadata.tables.has(tbl)) {
+          activeTables.set(tbl, alias);
+        }
+      }
+
+      for (const [activeTbl, activeAlias] of activeTables.entries()) {
+        const activeMeta = metadata.tables.get(activeTbl);
+        if (activeMeta) {
+          for (const fk of activeMeta.foreignKeys) {
+            const targetTbl = (fk.referencedTable || '').toLowerCase();
+            const targetCol = fk.referencedColumn || 'id';
+            const srcCol = fk.columnName;
+            const targetMeta = metadata.tables.get(targetTbl);
+            const targetDisplay = targetMeta ? targetMeta.table.name : fk.referencedTable;
+            const label = `${targetDisplay} ON ${targetDisplay}.${targetCol} = ${activeAlias}.${srcCol}`;
+            const item = new vscode.CompletionItem(label, vscode.CompletionItemKind.Snippet);
+            item.detail = `Smart JOIN: ${activeMeta.table.name} -> ${targetDisplay}`;
+            item.insertText = label;
+            items.push(item);
+          }
+        }
+
+        for (const [tblKey, otherMeta] of metadata.tables.entries()) {
+          for (const fk of otherMeta.foreignKeys) {
+            if ((fk.referencedTable || '').toLowerCase() === activeTbl) {
+              const targetCol = fk.referencedColumn || 'id';
+              const srcCol = fk.columnName;
+              const label = `${otherMeta.table.name} ON ${otherMeta.table.name}.${srcCol} = ${activeAlias}.${targetCol}`;
+              const item = new vscode.CompletionItem(label, vscode.CompletionItemKind.Snippet);
+              item.detail = `Smart JOIN: ${otherMeta.table.name} -> ${activeMeta ? activeMeta.table.name : activeTbl}`;
+              item.insertText = label;
+              items.push(item);
+            }
+          }
+        }
+      }
+    }
+
     // Check if user is typing after `ON` in a `JOIN` clause
     const joinOnMatch = linePrefix.match(/join\s+([a-zA-Z0-9_]+)(?:\s+(?:as\s+)?([a-zA-Z0-9_]+))?\s+on\s*$/i);
     if (joinOnMatch && metadata) {

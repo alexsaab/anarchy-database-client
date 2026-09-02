@@ -42,6 +42,7 @@ export class IconHelper {
       case 'CouchDB':
       case 'Couchbase':
       case 'Firestore':
+      case 'DuckDB':
         iconName = 'server/database.svg';
         break;
       default:

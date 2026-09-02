@@ -73,11 +73,18 @@ export class RowWriter {
   }
 
   public update(columnName: string, value: any, rowKey: Record<string, any>): BoundStatement {
+    return this.updateMultiple({ [columnName]: value }, rowKey);
+  }
+
+  public updateMultiple(updates: Record<string, any>, rowKey: Record<string, any>): BoundStatement {
     if (Object.keys(rowKey).length === 0) {
       throw new Error('Refusing to update without a row key.');
     }
-    // SET is bound before WHERE so numbered placeholders stay in argument order.
-    const set = `${quoteId(this.dbType, columnName)} = ${this.bind(value)}`;
+    const cols = Object.keys(updates);
+    if (cols.length === 0) {
+      throw new Error('No columns to update.');
+    }
+    const set = cols.map((col) => `${quoteId(this.dbType, col)} = ${this.bind(updates[col])}`).join(', ');
     const where = this.whereKey(rowKey);
     return { sql: `UPDATE ${this.tableRef} SET ${set} WHERE ${where};`, params: this.params };
   }

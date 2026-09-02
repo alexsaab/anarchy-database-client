@@ -36,5 +36,7 @@
   "command.runQueryFile": "Run SQL Script",
   "command.queryHistory": "Query History",
   "command.querySnippets": "Saved SQL Snippets",
-  "command.importData": "Import Data (CSV / Excel)..."
+  "command.importData": "Import Data (CSV / Excel)...",
+  "command.runActiveQuery": "Run SQL Query",
+  "command.chooseEditorConnection": "Switch Editor Database Connection"
 }

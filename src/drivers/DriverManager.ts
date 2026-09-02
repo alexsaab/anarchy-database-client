@@ -10,6 +10,7 @@ import { ClickhouseDriver } from './ClickhouseDriver.js';
 import { CouchdbDriver } from './CouchdbDriver.js';
 import { CouchbaseDriver } from './CouchbaseDriver.js';
 import { FirestoreDriver } from './FirestoreDriver.js';
+import { DuckdbDriver } from './DuckdbDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { SshTunnelManager, SshTunnelResult } from '../ssh/SshTunnelManager.js';
 import { ConnectionState } from './ConnectionState.js';
@@ -88,6 +89,9 @@ export class DriverManager {
           break;
         case 'Firestore':
           driver = new FirestoreDriver(finalConfig, password);
+          break;
+        case 'DuckDB':
+          driver = new DuckdbDriver(finalConfig, password);
           break;
         default:
           throw new Error(`Unsupported database type: ${config.type}`);

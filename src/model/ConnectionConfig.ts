@@ -9,7 +9,8 @@ export type DatabaseType =
   | 'ClickHouse'
   | 'CouchDB'
   | 'Couchbase'
-  | 'Firestore';
+  | 'Firestore'
+  | 'DuckDB';
 
 export type ConnectionColor = 'red' | 'green' | 'yellow' | 'blue' | 'purple' | 'orange' | 'default';
 
