@@ -30,7 +30,7 @@
   "command.explainQuery": "План Выполнения (EXPLAIN)",
   "command.openRedisEditor": "Redis Менеджер Ключей",
   "command.compareData": "Сравнение и Синхронизация Данных",
-  "command.aiAssistant": "ИИ SQL-Помощник",
+  "command.aiAssistant": "ИИ SQL-помощник",
   "command.goToTable": "Перейти к таблице",
   "command.generateMermaid": "Создать ER-диаграмму Mermaid",
   "command.runQueryFile": "Выполнить SQL-скрипт",
@@ -38,5 +38,9 @@
   "command.querySnippets": "Сохранённые сниппеты",
   "command.importData": "Импорт данных (CSV / Excel)...",
   "command.runActiveQuery": "Выполнить SQL-запрос",
-  "command.chooseEditorConnection": "Сменить подключение для редактора"
+  "command.chooseEditorConnection": "Сменить подключение для редактора",
+  "configuration.title": "Anarchy Database Client",
+  "configuration.promptForQueryParameters": "Запрашивать значения подстановок :name, $1 и ? перед выполнением запроса. Отключите, если используете JSONB-операторы ? в PostgreSQL.",
+  "command.setAiApiKey": "Задать API-ключ ИИ-провайдера...",
+  "command.vectorSearch": "Поиск по векторному сходству..."
 }

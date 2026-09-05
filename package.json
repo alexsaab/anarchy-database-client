@@ -20,6 +20,16 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "%configuration.title%",
+      "properties": {
+        "anarchyDbClient.promptForQueryParameters": {
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.promptForQueryParameters%"
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -222,6 +232,21 @@
         "command": "dbClient.importData",
         "title": "%command.importData%",
         "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "dbClient.aiAssistant",
+        "title": "%command.aiAssistant%",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "dbClient.setAiApiKey",
+        "title": "%command.setAiApiKey%",
+        "icon": "$(key)"
+      },
+      {
+        "command": "dbClient.vectorSearch",
+        "title": "%command.vectorSearch%",
+        "icon": "$(symbol-array)"
       }
     ],
     "menus": {
@@ -402,6 +427,16 @@
           "command": "dbClient.importData",
           "when": "view == database-client-explorer && viewItem == tableNode",
           "group": "1_data@1"
+        },
+        {
+          "command": "dbClient.aiAssistant",
+          "when": "view == database-client-explorer && (viewItem == connectionNode || viewItem == databaseNode)",
+          "group": "1_tools@8"
+        },
+        {
+          "command": "dbClient.vectorSearch",
+          "when": "view == database-client-explorer && viewItem == tableNode",
+          "group": "1_table@4"
         }
       ],
       "editor/context": [

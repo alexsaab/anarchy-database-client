@@ -36,5 +36,9 @@
   "command.querySnippets": "Gespeicherte SQL-Snippets",
   "command.importData": "Daten importieren (CSV / Excel)...",
   "command.runActiveQuery": "SQL-Abfrage ausführen",
-  "command.chooseEditorConnection": "Editor-Datenbankverbindung wechseln"
+  "command.chooseEditorConnection": "Editor-Datenbankverbindung wechseln",
+  "configuration.title": "Anarchy Database Client",
+  "configuration.promptForQueryParameters": "Vor der Ausführung nach Werten für die Platzhalter :name, $1 und ? fragen. Deaktivieren Sie dies, wenn Sie PostgreSQL-JSONB-Operatoren ? verwenden.",
+  "command.setAiApiKey": "API-Schlüssel des KI-Anbieters festlegen...",
+  "command.vectorSearch": "Vektor-Ähnlichkeitssuche..."
 }

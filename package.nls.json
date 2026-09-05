@@ -38,5 +38,9 @@
   "command.querySnippets": "Saved SQL Snippets",
   "command.importData": "Import Data (CSV / Excel)...",
   "command.runActiveQuery": "Run SQL Query",
-  "command.chooseEditorConnection": "Switch Editor Database Connection"
+  "command.chooseEditorConnection": "Switch Editor Database Connection",
+  "configuration.title": "Anarchy Database Client",
+  "configuration.promptForQueryParameters": "Prompt for values of :named, $1 and ? placeholders before running a query. Disable if you use PostgreSQL JSONB ? operators.",
+  "command.setAiApiKey": "Set AI Provider API Key...",
+  "command.vectorSearch": "Vector Similarity Search..."
 }

@@ -29,12 +29,16 @@
   "command.explainQuery": "执行计划分析 (EXPLAIN)",
   "command.openRedisEditor": "Redis 键值管理器",
   "command.compareData": "表数据对比与同步",
-  "command.aiAssistant": "AI SQL 智能助手",
+  "command.aiAssistant": "AI SQL 助手",
   "command.generateMermaid": "生成 Mermaid ER 图",
   "command.runQueryFile": "运行 SQL 脚本",
   "command.queryHistory": "查询历史",
   "command.querySnippets": "已保存的 SQL 片段",
   "command.importData": "导入数据 (CSV / Excel)...",
   "command.runActiveQuery": "运行 SQL 查询",
-  "command.chooseEditorConnection": "切换编辑器数据库连接"
+  "command.chooseEditorConnection": "切换编辑器数据库连接",
+  "configuration.title": "Anarchy Database Client",
+  "configuration.promptForQueryParameters": "执行查询前提示输入 :name、$1 和 ? 占位符的值。如果使用 PostgreSQL JSONB 的 ? 运算符，请禁用此项。",
+  "command.setAiApiKey": "设置 AI 提供商 API 密钥...",
+  "command.vectorSearch": "向量相似度搜索..."
 }

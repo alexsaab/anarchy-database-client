@@ -6,12 +6,15 @@ import { cursorFrom, keyColumnsFor } from '../sql/Keyset.js';
 import { ConnectionState } from '../drivers/ConnectionState.js';
 import { TableNode } from '../tree/TableNode.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
-import { PageParams, QueryResult } from '../model/QueryTypes.js';
+import { ColumnInfo, PageParams, QueryResult } from '../model/QueryTypes.js';
 import { ExportService } from '../export/ExportService.js';
+import { DataFormatService } from '../export/DataFormatService.js';
 import { QueryHistoryStorage } from '../storage/QueryHistoryStorage.js';
 import { DestructiveQueryGuard } from '../sql/DestructiveQueryGuard.js';
+import { resolveQueryParameters } from '../sql/QueryParameterPrompt.js';
 import { ExplainWebviewProvider } from './ExplainWebviewProvider.js';
 import { isRussian, t } from '../util/i18n.js';
+import { describeValue } from '../util/ValueInsight.js';
 
 export class TableWebviewProvider {
   private static activePanels: Map<string, vscode.WebviewPanel> = new Map();
@@ -215,6 +218,57 @@ export class TableWebviewProvider {
       const tableRef = formatTableRef(dbType, tableName, schemaName, connectionConfig.database);
 
       switch (msg.type) {
+        case 'describeValue': {
+          const insight = describeValue(msg.value);
+          if (insight) {
+            panel.webview.postMessage({ type: 'valueInsight', column: msg.column, insight });
+          } else {
+            vscode.window.setStatusBarMessage(
+              t('Nothing to decode in this value.', 'В этом значении нечего расшифровывать.'),
+              3000
+            );
+          }
+          break;
+        }
+        case 'copyAs': {
+          const rows = Array.isArray(msg.rows) ? msg.rows : [];
+          const fields: ColumnInfo[] = Array.isArray(msg.fields) ? msg.fields : [];
+          let text = '';
+          switch (msg.format) {
+            case 'markdown':
+              text = DataFormatService.toMarkdown(rows, fields);
+              break;
+            case 'sql':
+              // The webview has no idea what the table is really called; the host does.
+              text = DataFormatService.toSqlInsert(schemaName ? `${schemaName}.${tableName}` : tableName, rows, fields);
+              break;
+            case 'json':
+              text = DataFormatService.toJson(rows);
+              break;
+            case 'ts':
+              text = DataFormatService.toTypeScript(tableName, fields);
+              break;
+            case 'go':
+              text = DataFormatService.toGoStruct(tableName, fields);
+              break;
+            case 'python':
+              text = DataFormatService.toPythonDataclass(tableName, fields);
+              break;
+          }
+          if (!text) {
+            panel.webview.postMessage({
+              type: 'error',
+              message: t('Nothing to copy.', 'Нечего копировать.'),
+            });
+            break;
+          }
+          await vscode.env.clipboard.writeText(text);
+          vscode.window.setStatusBarMessage(
+            t(`Copied ${rows.length} row(s) as ${msg.format}`, `Скопировано строк: ${rows.length} (формат ${msg.format})`),
+            3000
+          );
+          break;
+        }
         case 'reconnect':
           try {
             await DriverManager.getInstance().reconnect(connectionConfig, password, sshPassword);
@@ -528,7 +582,19 @@ export class TableWebviewProvider {
       switch (msg.type) {
         case 'executeSql':
           try {
-            const check = DestructiveQueryGuard.checkQuery(msg.sql, connectionConfig);
+            // Placeholders are filled in before the guard runs, so it judges the
+            // statement that will actually reach the server.
+            const sql = await resolveQueryParameters(msg.sql);
+            if (sql === undefined) {
+              if (!isDisposed) {
+                panel.webview.postMessage({
+                  type: 'error',
+                  message: t('Execution cancelled by user.', 'Выполнение отменено пользователем.'),
+                });
+              }
+              break;
+            }
+            const check = DestructiveQueryGuard.checkQuery(sql, connectionConfig);
             if (check.isReadOnlyViolation) {
               if (!isDisposed) {
                 panel.webview.postMessage({
@@ -569,10 +635,10 @@ export class TableWebviewProvider {
               panel.webview.postMessage({ type: 'queryStarted', cancellable: driver.supportsCancellation });
             }
             try {
-              const res = await driver.executeQuery(msg.sql, queryId);
+              const res = await driver.executeQuery(sql, queryId);
               if (isDisposed) break;
               lastResult = res;
-              await QueryHistoryStorage.record(msg.sql, connectionConfig.name, res.costTimeMs);
+              await QueryHistoryStorage.record(sql, connectionConfig.name, res.costTimeMs);
               if (!isDisposed) {
                 panel.webview.postMessage({ type: 'queryResult', result: res });
               }
@@ -611,7 +677,10 @@ export class TableWebviewProvider {
           break;
         case 'explainSql':
           if (msg.sql && msg.sql.trim()) {
-            await ExplainWebviewProvider.show(connectionConfig, msg.sql, password, sshPassword);
+            const explainSql = await resolveQueryParameters(msg.sql);
+            if (explainSql !== undefined) {
+              await ExplainWebviewProvider.show(connectionConfig, explainSql, password, sshPassword);
+            }
           }
           break;
       }
@@ -668,6 +737,8 @@ export class TableWebviewProvider {
       viewSqlDiff: ru ? '👁 SQL предпросмотр' : '👁 SQL Preview',
       openFkTable: ru ? 'Открыть таблицу ↗' : 'Open Table ↗',
       jsonViewerTitle: ru ? 'Древовидный просмотр JSON' : 'JSON Tree Viewer',
+      valueInsightTitle: ru ? 'Расшифровка значения' : 'Value Details',
+      valueInsightHint: ru ? 'Показать расшифровку (UUID / дата)' : 'Show details (UUID / timestamp)',
       treeTab: ru ? 'Дерево' : 'Tree View',
       rawTab: ru ? 'Текст (JSON)' : 'Raw JSON',
       prettify: ru ? 'Форматировать' : 'Prettify',
@@ -1021,6 +1092,8 @@ export class TableWebviewProvider {
       <option value="sql">SQL INSERT</option>
       <option value="json">JSON Array</option>
       <option value="ts">TypeScript Interface</option>
+      <option value="go">Go Struct</option>
+      <option value="python">Python Dataclass</option>
     </select>
 
     <button id="toggleViewBtn" class="secondary" onclick="toggleChartView()">${text.chartView}</button>
@@ -1117,6 +1190,45 @@ export class TableWebviewProvider {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+    }
+
+    /**
+     * Cheap client-side gate for the badge: UUID shape, an integer big enough to
+     * be an epoch, or an ISO-looking date. The host has the final say.
+     */
+    function looksDecodable(val) {
+      if (val === null || val === undefined) return false;
+      if (typeof val === 'number') return val >= 631152000;
+      if (typeof val !== 'string') return false;
+      const s = val.trim();
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) return true;
+      if (/^\d{9,19}$/.test(s)) return true;
+      return /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2})?/.test(s);
+    }
+
+    function showValueInsight(column, insight) {
+      const wrap = document.createElement('div');
+      const heading = document.createElement('div');
+      heading.style.cssText = 'font-weight:bold;margin-bottom:8px;';
+      heading.textContent = insight.title + ' — ' + column;
+      wrap.appendChild(heading);
+
+      const table = document.createElement('table');
+      table.style.cssText = 'border-collapse:collapse;font-family:monospace;font-size:12px;';
+      for (const row of insight.details) {
+        const tr = document.createElement('tr');
+        const th = document.createElement('td');
+        th.style.cssText = 'padding:2px 12px 2px 0;opacity:0.7;white-space:nowrap;';
+        th.textContent = row.label;
+        const td = document.createElement('td');
+        td.style.cssText = 'padding:2px 0;user-select:text;';
+        td.textContent = row.value;
+        tr.appendChild(th);
+        tr.appendChild(td);
+        table.appendChild(tr);
+      }
+      wrap.appendChild(table);
+      openModal('${text.valueInsightTitle}', wrap, () => {});
     }
 
     function isImageUrl(val) {
@@ -1823,6 +1935,20 @@ export class TableWebviewProvider {
             td.appendChild(jsonBadge);
           }
 
+          // UUID / timestamp badge: the host decodes it, so the rules live in one
+          // tested module rather than being duplicated in this script.
+          if (!isJson && looksDecodable(val)) {
+            const infoBadge = document.createElement('span');
+            infoBadge.className = 'json-badge';
+            infoBadge.textContent = '🕓';
+            infoBadge.title = '${text.valueInsightHint}';
+            infoBadge.onclick = (e) => {
+              e.stopPropagation();
+              vscode.postMessage({ type: 'describeValue', column: f.name, value: val });
+            };
+            td.appendChild(infoBadge);
+          }
+
           // Image thumbnail
           if (isImageUrl(val)) {
             const thumb = document.createElement('img');
@@ -1875,6 +2001,11 @@ export class TableWebviewProvider {
             sortOrder: currentSortOrder || undefined,
           }
         });
+        return;
+      }
+
+      if (msg.type === 'valueInsight') {
+        showValueInsight(msg.column, msg.insight);
         return;
       }
 
@@ -2245,36 +2376,9 @@ export class TableWebviewProvider {
         alert('${ru ? "Нет данных для копирования" : "No data to copy"}');
         return;
       }
-      let text = '';
-      if (format === 'markdown') {
-        const colNames = currentFields.map(f => f.name);
-        text = '| ' + colNames.join(' | ') + ' |\\n| ' + colNames.map(() => '---').join(' | ') + ' |\\n';
-        text += allRows.map(r => '| ' + colNames.map(c => (r[c] === null || r[c] === undefined ? 'NULL' : String(r[c]))).join(' | ') + ' |').join('\\n');
-      } else if (format === 'sql') {
-        const colNames = currentFields.map(f => '"' + f.name + '"').join(', ');
-        text = allRows.map(r => {
-          const vals = currentFields.map(f => {
-            const v = r[f.name];
-            if (v === null || v === undefined) return 'NULL';
-            if (typeof v === 'number') return String(v);
-            return "'" + String(v).replace(/'/g, "''") + "'";
-          }).join(', ');
-          return 'INSERT INTO "table" (' + colNames + ') VALUES (' + vals + ');';
-        }).join('\\n');
-      } else if (format === 'json') {
-        text = JSON.stringify(allRows, null, 2);
-      } else if (format === 'ts') {
-        const lines = currentFields.map(f => {
-          let t = 'string';
-          const type = (f.type || '').toLowerCase();
-          if (type.includes('int') || type.includes('float') || type.includes('decimal') || type.includes('numeric')) t = 'number';
-          else if (type.includes('bool')) t = 'boolean';
-          return '  ' + f.name + (f.nullable ? '?: ' : ': ') + t + ';';
-        });
-        text = 'export interface RowData {\\n' + lines.join('\\n') + '\\n}';
-      }
-      navigator.clipboard.writeText(text);
-      alert('${ru ? "Скопировано в буфер обмена!" : "Copied to clipboard!"}');
+      // The host owns the formatters (DataFormatService) and the real table name,
+      // so it renders the text and writes the clipboard.
+      vscode.postMessage({ type: 'copyAs', format, rows: allRows, fields: currentFields });
     }
 
     window.addEventListener('keydown', (e) => {

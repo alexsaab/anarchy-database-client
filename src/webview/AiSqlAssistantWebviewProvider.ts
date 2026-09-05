@@ -5,7 +5,12 @@ import { AiService } from '../ai/AiService.js';
 import { isRussian, t } from '../util/i18n.js';
 
 export class AiSqlAssistantWebviewProvider {
-  public static async show(connectionConfig?: ConnectionConfig, password?: string, sshPassword?: string) {
+  public static async show(
+    connectionConfig?: ConnectionConfig,
+    password?: string,
+    sshPassword?: string,
+    apiKey?: string
+  ) {
     const title = t(`AI SQL Assistant`, `ИИ SQL-Помощник`);
     const panel = vscode.window.createWebviewPanel(
       'dbClientAiAssistant',
@@ -39,7 +44,7 @@ export class AiSqlAssistantWebviewProvider {
           prompt,
           schemaSummary,
           connectionConfig?.type || 'SQL',
-          undefined,
+          apiKey,
           ollamaEndpoint
         );
         panel.webview.postMessage({

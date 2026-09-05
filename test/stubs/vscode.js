@@ -6,7 +6,14 @@ class EventEmitter {
   dispose() { this.handlers = []; }
 }
 
-const recorded = { info: [], warn: [], error: [], saveDialogPath: null, progressTitles: [], quickPickAnswer: null };
+const recorded = {
+  info: [], warn: [], error: [], saveDialogPath: null, progressTitles: [], quickPickAnswer: null,
+  // Queued answers for showInputBox, shifted one per call; a queued `null` stands
+  // for the user dismissing the box. Prompts seen are recorded for assertions.
+  inputBoxAnswers: [], inputBoxOptions: [],
+  // Settings the module under test should see, keyed `section.key`.
+  configuration: {},
+};
 
 module.exports = {
   __recorded: recorded,
@@ -77,7 +84,18 @@ module.exports = {
     registerHoverProvider: () => ({ dispose() {} }),
   },
   commands: { registerCommand: () => ({ dispose() {} }), executeCommand: async () => {} },
-  workspace: { openTextDocument: async (o) => o, getConfiguration: () => ({ get: () => undefined }) },
+  workspace: {
+    openTextDocument: async (o) => o,
+    getConfiguration: (section) => ({
+      // Real VS Code returns the supplied default when a setting is unset.
+      get: (key, fallback) => {
+        const full = section ? `${section}.${key}` : key;
+        return Object.prototype.hasOwnProperty.call(recorded.configuration, full)
+          ? recorded.configuration[full]
+          : fallback;
+      },
+    }),
+  },
   window: {
     createOutputChannel: () => ({ appendLine() {}, show() {}, dispose() {} }),
     createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
@@ -87,6 +105,12 @@ module.exports = {
     showErrorMessage: (m) => { recorded.error.push(m); return Promise.resolve(undefined); },
     showSaveDialog: async () => (recorded.saveDialogPath ? { fsPath: recorded.saveDialogPath } : undefined),
     showTextDocument: async () => {},
+    showInputBox: async (options) => {
+      recorded.inputBoxOptions.push(options || {});
+      if (recorded.inputBoxAnswers.length === 0) return undefined;
+      const answer = recorded.inputBoxAnswers.shift();
+      return answer === null ? undefined : answer;
+    },
     showQuickPick: async (items) => {
       if (recorded.quickPickAnswer === 'ALL') return Array.isArray(items) ? items[0] : undefined;
       if (recorded.quickPickAnswer === 'PAGE') return Array.isArray(items) ? items[1] : undefined;

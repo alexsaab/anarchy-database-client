@@ -9,6 +9,23 @@ export class ConnectionStorageService {
     this.context = context;
   }
 
+  /** Key for the AI provider secret; not tied to any single connection. */
+  private static readonly AI_KEY = 'ai_provider_api_key';
+
+  /** Returns the stored OpenAI/Anthropic key, or undefined when none is set. */
+  public async getAiApiKey(): Promise<string | undefined> {
+    return await this.context.secrets.get(ConnectionStorageService.AI_KEY);
+  }
+
+  /** Stores the AI provider key, or removes it when given an empty string. */
+  public async setAiApiKey(key: string | undefined): Promise<void> {
+    if (key && key.trim()) {
+      await this.context.secrets.store(ConnectionStorageService.AI_KEY, key.trim());
+    } else {
+      await this.context.secrets.delete(ConnectionStorageService.AI_KEY);
+    }
+  }
+
   public getConnections(): SavedConnectionProfile[] {
     return this.context.globalState.get<SavedConnectionProfile[]>(ConnectionStorageService.STORAGE_KEY, []);
   }

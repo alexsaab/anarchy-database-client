@@ -9,6 +9,14 @@ export interface AiResponse {
   provider: string;
 }
 
+export type AiProvider = 'openai' | 'anthropic';
+
+/** Model used when the caller does not pin one. */
+const DEFAULT_MODELS: Record<AiProvider, string> = {
+  openai: 'gpt-4o-mini',
+  anthropic: 'claude-sonnet-5',
+};
+
 export class AiService {
   /**
    * Generates a SQL statement from a natural language prompt given schema metadata and DBMS dialect.
@@ -58,7 +66,21 @@ export class AiService {
       // VS Code LM not active or rejected
     }
 
-    // 2. Try Ollama local endpoint if accessible
+    // 2. Try the configured cloud provider key (stored in VS Code Secrets)
+    if (customApiKey && customApiKey.trim()) {
+      try {
+        const key = customApiKey.trim();
+        const cloudRes =
+          AiService.detectProvider(key) === 'anthropic'
+            ? await AiService.callAnthropic(key, prompt, schemaSummary, dbType)
+            : await AiService.callOpenAi(key, prompt, schemaSummary, dbType);
+        if (cloudRes) return cloudRes;
+      } catch {
+        // Key rejected or provider unreachable -- fall through to the next backend.
+      }
+    }
+
+    // 3. Try Ollama local endpoint if accessible
     if (ollamaEndpoint) {
       try {
         const ollamaRes = await AiService.callOllama(ollamaEndpoint, prompt, schemaSummary, dbType);
@@ -68,7 +90,7 @@ export class AiService {
       }
     }
 
-    // 3. Smart Schema-Aware Heuristic Generator (Offline fallback)
+    // 4. Smart Schema-Aware Heuristic Generator (Offline fallback)
     return AiService.generateHeuristicSql(prompt, schemaSummary, dbType);
   }
 
@@ -190,6 +212,171 @@ export class AiService {
       explanation,
       provider: 'Built-in Schema Engine',
     };
+  }
+
+  /**
+   * Anthropic keys are `sk-ant-...`, OpenAI keys `sk-...`. Anything else is a
+   * self-hosted OpenAI-compatible gateway, which is the more common case.
+   */
+  public static detectProvider(apiKey: string): AiProvider {
+    return apiKey.trim().startsWith('sk-ant-') ? 'anthropic' : 'openai';
+  }
+
+  /**
+   * Pulls a statement out of whatever the model returned: strict JSON, JSON in a
+   * fenced block, a bare ```sql block, or plain SQL text.
+   */
+  public static parseSqlResponse(raw: string): { sql: string; explanation?: string } | null {
+    const text = (raw || '').trim();
+    if (!text) return null;
+
+    // JSON, possibly wrapped in a ```json fence.
+    const jsonCandidate = text.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+    if (jsonCandidate.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(jsonCandidate);
+        if (parsed && typeof parsed.sql === 'string' && parsed.sql.trim()) {
+          return { sql: parsed.sql.trim(), explanation: typeof parsed.explanation === 'string' ? parsed.explanation : undefined };
+        }
+      } catch {
+        // Not JSON after all -- fall through to the fence and plain-text paths.
+      }
+    }
+
+    const fenced = /```(?:sql)?\s*([\s\S]*?)```/i.exec(text);
+    if (fenced && fenced[1].trim()) {
+      return { sql: fenced[1].trim() };
+    }
+
+    return { sql: text };
+  }
+
+  /** Builds the instruction shared by every cloud backend. */
+  public static buildPrompt(prompt: string, schemaSummary: string, dbType: string): string {
+    return (
+      `You are an expert SQL engineer. Generate a single valid ${dbType} SQL query for the user request, ` +
+      `using only the schema below.\n\nSchema:\n${schemaSummary || '(schema unavailable)'}\n\n` +
+      `Answer with JSON only, using the keys "sql" and "explanation". No markdown fences.\n\n` +
+      `User Request: ${prompt}`
+    );
+  }
+
+  /** OpenAI Chat Completions (and any OpenAI-compatible gateway). */
+  private static async callOpenAi(
+    apiKey: string,
+    prompt: string,
+    schemaSummary: string,
+    dbType: string,
+    model: string = DEFAULT_MODELS.openai
+  ): Promise<AiResponse | null> {
+    const body = JSON.stringify({
+      model,
+      messages: [{ role: 'user', content: AiService.buildPrompt(prompt, schemaSummary, dbType) }],
+      temperature: 0,
+    });
+
+    const raw = await AiService.postJson('https://api.openai.com/v1/chat/completions', body, {
+      Authorization: `Bearer ${apiKey}`,
+    });
+    if (!raw) return null;
+
+    const content = raw?.choices?.[0]?.message?.content;
+    const parsed = typeof content === 'string' ? AiService.parseSqlResponse(content) : null;
+    if (!parsed) return null;
+
+    return {
+      sql: parsed.sql,
+      explanation: parsed.explanation || t('Generated with OpenAI.', 'Сгенерировано через OpenAI.'),
+      provider: `OpenAI (${model})`,
+    };
+  }
+
+  /** Anthropic Messages API. */
+  private static async callAnthropic(
+    apiKey: string,
+    prompt: string,
+    schemaSummary: string,
+    dbType: string,
+    model: string = DEFAULT_MODELS.anthropic
+  ): Promise<AiResponse | null> {
+    const body = JSON.stringify({
+      model,
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: AiService.buildPrompt(prompt, schemaSummary, dbType) }],
+    });
+
+    const raw = await AiService.postJson('https://api.anthropic.com/v1/messages', body, {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    });
+    if (!raw) return null;
+
+    const content = Array.isArray(raw?.content)
+      ? raw.content.filter((c: any) => c?.type === 'text').map((c: any) => c.text).join('\n')
+      : undefined;
+    const parsed = typeof content === 'string' ? AiService.parseSqlResponse(content) : null;
+    if (!parsed) return null;
+
+    return {
+      sql: parsed.sql,
+      explanation: parsed.explanation || t('Generated with Anthropic Claude.', 'Сгенерировано через Anthropic Claude.'),
+      provider: `Anthropic (${model})`,
+    };
+  }
+
+  /**
+   * Minimal JSON POST. Resolves null on any transport error, non-2xx status or
+   * unparseable body, so a failing backend just falls through to the next one.
+   */
+  private static postJson(urlStr: string, body: string, headers: Record<string, string>): Promise<any | null> {
+    return new Promise((resolve) => {
+      let url: URL;
+      try {
+        url = new URL(urlStr);
+      } catch {
+        resolve(null);
+        return;
+      }
+
+      const client = url.protocol === 'https:' ? https : http;
+      const req = client.request(
+        {
+          hostname: url.hostname,
+          port: url.port || (url.protocol === 'https:' ? 443 : 80),
+          path: url.pathname + url.search,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(body),
+            ...headers,
+          },
+          timeout: 30000,
+        },
+        (res) => {
+          let data = '';
+          res.on('data', (chunk) => (data += chunk));
+          res.on('end', () => {
+            if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+              resolve(null);
+              return;
+            }
+            try {
+              resolve(JSON.parse(data));
+            } catch {
+              resolve(null);
+            }
+          });
+        }
+      );
+
+      req.on('error', () => resolve(null));
+      req.on('timeout', () => {
+        req.destroy();
+        resolve(null);
+      });
+      req.write(body);
+      req.end();
+    });
   }
 
   private static async callOllama(

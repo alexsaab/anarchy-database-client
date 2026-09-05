@@ -35,6 +35,18 @@ import { StatusBarHealthMonitor } from './status/StatusBarHealthMonitor.js';
 import { MermaidService } from './diagram/MermaidService.js';
 import { ImportService } from './import/ImportService.js';
 import { SqlScriptRunner } from './script/SqlScriptRunner.js';
+import { resolveQueryParameters } from './sql/QueryParameterPrompt.js';
+import { AiService } from './ai/AiService.js';
+import {
+  buildKnnQuery,
+  buildKnnQueryForRow,
+  declaredDimensions,
+  isVectorColumn,
+  parseVector,
+  VectorMetric,
+} from './sql/VectorQuery.js';
+import { formatLiteral } from './sql/QueryParameters.js';
+import { formatTableRef } from './sql/RowWriter.js';
 import { SchemaNode } from './tree/SchemaNode.js';
 import { TableInfo } from './model/QueryTypes.js';
 import { SchemaMetadataCache } from './provider/SchemaMetadataCache.js';
@@ -635,6 +647,128 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.vectorSearch', async (node?: TableNode) => {
+      if (!node || !(node instanceof TableNode)) return;
+
+      const config = node.connectionConfig;
+      const driver = await DriverManager.getInstance().getDriver(config, node.password, node.sshPassword);
+      const columns = await driver.getColumns(node.table.name, config.database, node.table.schema);
+      const vectorColumns = columns.filter((c) => isVectorColumn(c));
+
+      if (vectorColumns.length === 0) {
+        vscode.window.showInformationMessage(
+          t(
+            `"${node.table.name}" has no pgvector columns.`,
+            `В таблице "${node.table.name}" нет колонок pgvector.`
+          )
+        );
+        return;
+      }
+
+      let vectorColumn = vectorColumns[0];
+      if (vectorColumns.length > 1) {
+        const picked = await vscode.window.showQuickPick(
+          vectorColumns.map((c) => ({
+            label: `$(symbol-array) ${c.name}`,
+            description: c.type,
+            column: c,
+          })),
+          { placeHolder: t('Select the embedding column', 'Выберите колонку с эмбеддингом') }
+        );
+        if (!picked) return;
+        vectorColumn = picked.column;
+      }
+
+      const byRow = t('Similar to an existing row', 'Похожие на существующую строку');
+      const byVector = t('Nearest to a pasted embedding', 'Ближайшие к вставленному эмбеддингу');
+      const mode = await vscode.window.showQuickPick([byRow, byVector], {
+        placeHolder: t('Vector similarity search', 'Поиск по векторному сходству'),
+      });
+      if (!mode) return;
+
+      const metricPick = await vscode.window.showQuickPick(
+        [
+          { label: t('Cosine distance', 'Косинусное расстояние'), description: '<=>', metric: 'cosine' as VectorMetric },
+          { label: t('Euclidean (L2)', 'Евклидово (L2)'), description: '<->', metric: 'l2' as VectorMetric },
+          { label: t('Inner product', 'Скалярное произведение'), description: '<#>', metric: 'inner_product' as VectorMetric },
+        ],
+        { placeHolder: t('Distance metric', 'Метрика расстояния') }
+      );
+      if (!metricPick) return;
+
+      const limitInput = await vscode.window.showInputBox({
+        title: t('Number of neighbours', 'Количество соседей'),
+        value: '10',
+        validateInput: (v) => (/^\d+$/.test(v.trim()) && Number(v) > 0 ? undefined : t('Enter a positive integer.', 'Введите целое положительное число.')),
+      });
+      if (limitInput === undefined) return;
+
+      const tableRef = formatTableRef(config.type, node.table.name, node.table.schema, config.database);
+      let sql: string;
+
+      if (mode === byRow) {
+        const keyColumn = columns.find((c) => c.isPrimaryKey) || columns[0];
+        if (!keyColumn) return;
+        const keyValue = await vscode.window.showInputBox({
+          title: t(`Anchor row: value of ${keyColumn.name}`, `Опорная строка: значение ${keyColumn.name}`),
+          prompt: t('The row whose neighbours you want to find', 'Строка, для которой ищутся ближайшие соседи'),
+          ignoreFocusOut: true,
+        });
+        if (keyValue === undefined || !keyValue.trim()) return;
+
+        sql = buildKnnQueryForRow({
+          tableRef,
+          vectorColumn: vectorColumn.name,
+          keyColumn: keyColumn.name,
+          keyLiteral: formatLiteral(keyValue),
+          metric: metricPick.metric,
+          limit: Number(limitInput),
+        });
+      } else {
+        const declared = declaredDimensions(vectorColumn);
+        const pasted = await vscode.window.showInputBox({
+          title: t('Reference embedding', 'Эталонный эмбеддинг'),
+          prompt: declared
+            ? t(`Paste ${declared} comma-separated numbers, e.g. [0.1, 0.2, ...]`, `Вставьте ${declared} чисел через запятую, например [0.1, 0.2, ...]`)
+            : t('Paste the embedding, e.g. [0.1, 0.2, 0.3]', 'Вставьте эмбеддинг, например [0.1, 0.2, 0.3]'),
+          ignoreFocusOut: true,
+          validateInput: (v) => {
+            const parsed = parseVector(v);
+            if (!parsed) return t('Not a valid embedding.', 'Некорректный эмбеддинг.');
+            if (declared && parsed.length !== declared) {
+              return t(
+                `Expected ${declared} dimensions, got ${parsed.length}.`,
+                `Ожидается размерность ${declared}, получено ${parsed.length}.`
+              );
+            }
+            return undefined;
+          },
+        });
+        if (pasted === undefined) return;
+        const reference = parseVector(pasted);
+        if (!reference) return;
+
+        sql = buildKnnQuery({
+          tableRef,
+          vectorColumn: vectorColumn.name,
+          reference,
+          metric: metricPick.metric,
+          limit: Number(limitInput),
+        });
+      }
+
+      await SqlScriptRunner.runScript(
+        sql,
+        config,
+        node.password,
+        node.sshPassword,
+        `${node.table.name} — ${t('vector search', 'векторный поиск')}`,
+        true
+      );
+    })
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand('dbClient.newQuery', async (node?: ConnectionNode | DatabaseNode) => {
       if (node) {
         const config = (node as DatabaseNode).connectionConfig || (node as ConnectionNode).config;
@@ -755,8 +889,10 @@ export function activate(context: vscode.ExtensionContext) {
       }
       const target = await resolveTargetConnection(editor, node);
       if (!target) return;
+      const boundSql = await resolveQueryParameters(sql);
+      if (boundSql === undefined) return;
       await SqlScriptRunner.runScript(
-        sql,
+        boundSql,
         target.config,
         target.pass,
         target.sshPass,
@@ -802,7 +938,9 @@ export function activate(context: vscode.ExtensionContext) {
       }
       const target = await resolveTargetConnection(editor, node);
       if (!target) return;
-      await ExplainWebviewProvider.show(target.config, sql, target.pass, target.sshPass);
+      const boundSql = await resolveQueryParameters(sql);
+      if (boundSql === undefined) return;
+      await ExplainWebviewProvider.show(target.config, boundSql, target.pass, target.sshPass);
     })
   );
 
@@ -827,7 +965,34 @@ export function activate(context: vscode.ExtensionContext) {
       const config = node ? (node as DatabaseNode).connectionConfig || (node as ConnectionNode).config : undefined;
       const pass = node ? (node as ConnectionNode).password : undefined;
       const sshPass = node ? (node as ConnectionNode).sshPassword : undefined;
-      await AiSqlAssistantWebviewProvider.show(config, pass, sshPass);
+      const aiApiKey = await storageService.getAiApiKey();
+      await AiSqlAssistantWebviewProvider.show(config, pass, sshPass, aiApiKey);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.setAiApiKey', async () => {
+      const existing = await storageService.getAiApiKey();
+      const entered = await vscode.window.showInputBox({
+        title: t('AI Provider API Key', 'API-ключ ИИ-провайдера'),
+        prompt: t(
+          'OpenAI (sk-...) or Anthropic (sk-ant-...) key. Stored in VS Code Secrets; leave empty to remove.',
+          'Ключ OpenAI (sk-...) или Anthropic (sk-ant-...). Хранится в VS Code Secrets; оставьте пустым, чтобы удалить.'
+        ),
+        value: existing ?? '',
+        password: true,
+        ignoreFocusOut: true,
+      });
+      if (entered === undefined) return;
+      await storageService.setAiApiKey(entered);
+      vscode.window.showInformationMessage(
+        entered.trim()
+          ? t(
+              `AI key saved (${AiService.detectProvider(entered.trim()) === 'anthropic' ? 'Anthropic' : 'OpenAI'}).`,
+              `Ключ ИИ сохранён (${AiService.detectProvider(entered.trim()) === 'anthropic' ? 'Anthropic' : 'OpenAI'}).`
+            )
+          : t('AI key removed.', 'Ключ ИИ удалён.')
+      );
     })
   );
 
