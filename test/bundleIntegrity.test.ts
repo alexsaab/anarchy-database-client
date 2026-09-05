@@ -17,14 +17,14 @@ import { execFileSync } from 'child_process';
  */
 const root = path.join(__dirname, '..');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { external, runtimeModules } = require(path.join(root, 'scripts', 'bundle-config.js'));
+const { external, nativeAddonsExternal, runtimeModules } = require(path.join(root, 'scripts', 'bundle-config.js'));
 
 test('the extension bundle and its sqlite engine exist', () => {
   assert.ok(fs.existsSync(path.join(root, 'out', 'extension.js')), 'run `npm run build` first');
   assert.ok(fs.existsSync(path.join(root, 'out', 'node-sqlite3-wasm.wasm')));
 });
 
-test('every runtime module is reachable from the bundle with no node_modules present', () => {
+test('every runtime module is reachable from the bundle with no node_modules present', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundlecheck-'));
   // The probe entry must live inside the repo so esbuild resolves modules from
   // the repo's node_modules, exactly as the real build does.
@@ -43,13 +43,14 @@ test('every runtime module is reachable from the bundle with no node_modules pre
     // Same bundler settings as the shipped extension.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const esbuild = require('esbuild');
-    esbuild.buildSync({
+    await esbuild.build({
       entryPoints: [probeSrc],
       bundle: true,
       platform: 'node',
       format: 'cjs',
       outfile: path.join(dir, 'probe.bundle.js'),
       external,
+      plugins: [nativeAddonsExternal()],
       logLevel: 'silent',
       absWorkingDir: root,
     });

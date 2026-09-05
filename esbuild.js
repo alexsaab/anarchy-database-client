@@ -1,7 +1,7 @@
 const esbuild = require('esbuild');
 const fs = require('fs');
 const path = require('path');
-const { external } = require('./scripts/bundle-config.js');
+const { external, nativeAddonsExternal } = require('./scripts/bundle-config.js');
 
 /**
  * node-sqlite3-wasm loads its .wasm from `__dirname`, which after bundling is
@@ -29,6 +29,7 @@ async function main() {
     platform: 'node',
     outfile: 'out/extension.js',
     external,
+    plugins: [nativeAddonsExternal()],
     logLevel: 'info',
   });
 

@@ -3,6 +3,7 @@
 const esbuild = require('esbuild');
 const fs = require('fs');
 const path = require('path');
+const { nativeAddonsExternal } = require('./bundle-config.js');
 
 const testDir = path.join(__dirname, '..', 'test');
 const outDir = path.join(__dirname, '..', 'out-test');
@@ -24,6 +25,7 @@ esbuild
     outdir: outDir,
     sourcemap: 'inline',
     logLevel: 'warning',
+    plugins: [nativeAddonsExternal()],
     alias: { vscode: path.join(testDir, 'stubs', 'vscode.js') },
     external: ['esbuild', 'pg-native', 'cardinal', 'cpu-features', 'duckdb'],
   })
