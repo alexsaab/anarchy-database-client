@@ -220,21 +220,24 @@ export class MssqlDriver extends BaseDriver {
     return res.rows.map((r: any) => r.name);
   }
 
-  async getTables(databaseName?: string, schemaName: string = 'dbo'): Promise<TableInfo[]> {
-    const res = await this.executeParameterized(
-      `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
-       WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA = @p1 ORDER BY TABLE_NAME`,
-      [schemaName]
-    );
-    return res.rows.map((r: any) => ({ name: r.TABLE_NAME, type: 'table', schema: schemaName }));
+  async getTables(databaseName?: string, schemaName?: string): Promise<TableInfo[]> {
+    const filterSchema = schemaName && schemaName !== '__all__';
+    const sql = filterSchema
+      ? `SELECT TABLE_NAME, TABLE_SCHEMA FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA = @p1 ORDER BY TABLE_SCHEMA, TABLE_NAME`
+      : `SELECT TABLE_NAME, TABLE_SCHEMA FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA NOT IN ('guest', 'INFORMATION_SCHEMA', 'sys') ORDER BY TABLE_SCHEMA, TABLE_NAME`;
+    const params = filterSchema ? [schemaName] : [];
+    const res = await this.executeParameterized(sql, params);
+    return res.rows.map((r: any) => ({ name: r.TABLE_NAME, type: 'table', schema: r.TABLE_SCHEMA || schemaName || 'dbo' }));
   }
 
-  async getViews(databaseName?: string, schemaName: string = 'dbo'): Promise<TableInfo[]> {
-    const res = await this.executeParameterized(
-      `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = @p1 ORDER BY TABLE_NAME`,
-      [schemaName]
-    );
-    return res.rows.map((r: any) => ({ name: r.TABLE_NAME, type: 'view', schema: schemaName }));
+  async getViews(databaseName?: string, schemaName?: string): Promise<TableInfo[]> {
+    const filterSchema = schemaName && schemaName !== '__all__';
+    const sql = filterSchema
+      ? `SELECT TABLE_NAME, TABLE_SCHEMA FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = @p1 ORDER BY TABLE_SCHEMA, TABLE_NAME`
+      : `SELECT TABLE_NAME, TABLE_SCHEMA FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA NOT IN ('guest', 'INFORMATION_SCHEMA', 'sys') ORDER BY TABLE_SCHEMA, TABLE_NAME`;
+    const params = filterSchema ? [schemaName] : [];
+    const res = await this.executeParameterized(sql, params);
+    return res.rows.map((r: any) => ({ name: r.TABLE_NAME, type: 'view', schema: r.TABLE_SCHEMA || schemaName || 'dbo' }));
   }
 
   async getColumns(tableName: string, databaseName?: string, schemaName: string = 'dbo'): Promise<ColumnInfo[]> {

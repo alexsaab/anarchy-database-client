@@ -800,13 +800,63 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('dbClient.queryBuilder', async (node?: ConnectionNode | DatabaseNode) => {
+    vscode.commands.registerCommand('dbClient.queryBuilder', async (node?: any) => {
+      let config: ConnectionConfig | undefined;
+      let pass: string | undefined;
+      let sshPass: string | undefined;
+      let initialDatabase: string | undefined;
+      let initialSchema: string | undefined;
+      let initialTable: string | undefined;
+
       if (node) {
-        const config = (node as DatabaseNode).connectionConfig || (node as ConnectionNode).config;
-        const pass = (node as ConnectionNode).password;
-        const sshPass = (node as ConnectionNode).sshPassword;
-        await QueryBuilderWebviewProvider.show(config, pass, sshPass);
+        if (node.connectionConfig) {
+          config = node.connectionConfig;
+        } else if (node.config) {
+          config = node.config;
+        }
+        pass = node.password;
+        sshPass = node.sshPassword;
+
+        if (node.dbName) {
+          initialDatabase = node.dbName;
+        }
+        if (node.schemaName) {
+          initialSchema = node.schemaName;
+        }
+        if (node.table) {
+          initialTable = node.table.name;
+          if (node.table.schema) {
+            initialSchema = node.table.schema;
+          }
+        }
       }
+
+      if (!config) {
+        const connections = storageService.getConnections();
+        if (connections.length === 0) {
+          vscode.window.showInformationMessage(t('No database connections configured.', 'Нет настроенных подключений.'));
+          return;
+        }
+        if (connections.length === 1) {
+          config = connections[0];
+        } else {
+          const items = connections.map((c) => ({
+            label: `$(database) ${c.name}`,
+            description: `${c.type} — ${c.database || c.host || ''}`,
+            conn: c,
+          }));
+          const picked = await vscode.window.showQuickPick(items, {
+            placeHolder: t('Select database connection for Visual Query Builder', 'Выберите подключение к БД для Конструктора Запросов'),
+          });
+          if (!picked) return;
+          config = picked.conn;
+        }
+      }
+
+      if (!pass) pass = await storageService.getPassword(config.id);
+      if (!sshPass) sshPass = await storageService.getSshPassword(config.id);
+
+      await QueryBuilderWebviewProvider.show(config, pass, sshPass, initialDatabase, initialSchema, initialTable);
     })
   );
 

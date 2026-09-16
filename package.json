@@ -360,7 +360,7 @@
         },
         {
           "command": "dbClient.queryBuilder",
-          "when": "view == database-client-explorer && (viewItem == connectionNode || viewItem == databaseNode)",
+          "when": "view == database-client-explorer && (viewItem == connectionNode || viewItem == databaseNode || viewItem == schemaNode || viewItem == tableGroupNode || viewItem == tableNode)",
           "group": "1_tools@5"
         },
         {

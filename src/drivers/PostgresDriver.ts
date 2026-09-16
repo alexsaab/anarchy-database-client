@@ -156,25 +156,33 @@ export class PostgresDriver extends BaseDriver {
     return res.rows.map((r: any) => r.schema_name);
   }
 
-  async getTables(databaseName?: string, schemaName: string = 'public'): Promise<TableInfo[]> {
+  async getTables(databaseName?: string, schemaName?: string): Promise<TableInfo[]> {
+    const filterSchema = schemaName && schemaName !== '__all__';
+    const whereClause = filterSchema
+      ? `table_schema = '${schemaName}'`
+      : `table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast')`;
     const res = await this.executeQuery(
-      `SELECT table_name FROM information_schema.tables WHERE table_schema = '${schemaName}' AND table_type = 'BASE TABLE' ORDER BY table_name;`
+      `SELECT table_name, table_schema FROM information_schema.tables WHERE ${whereClause} AND table_type = 'BASE TABLE' ORDER BY table_schema, table_name;`
     );
     return res.rows.map((r: any) => ({
       name: r.table_name,
       type: 'table',
-      schema: schemaName,
+      schema: r.table_schema || schemaName || 'public',
     }));
   }
 
-  async getViews(databaseName?: string, schemaName: string = 'public'): Promise<TableInfo[]> {
+  async getViews(databaseName?: string, schemaName?: string): Promise<TableInfo[]> {
+    const filterSchema = schemaName && schemaName !== '__all__';
+    const whereClause = filterSchema
+      ? `table_schema = '${schemaName}'`
+      : `table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast')`;
     const res = await this.executeQuery(
-      `SELECT table_name FROM information_schema.views WHERE table_schema = '${schemaName}' ORDER BY table_name;`
+      `SELECT table_name, table_schema FROM information_schema.views WHERE ${whereClause} ORDER BY table_schema, table_name;`
     );
     return res.rows.map((r: any) => ({
       name: r.table_name,
       type: 'view',
-      schema: schemaName,
+      schema: r.table_schema || schemaName || 'public',
     }));
   }
 
