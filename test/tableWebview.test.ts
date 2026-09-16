@@ -62,11 +62,12 @@ test('TableWebviewProvider getHtml script executes without error', () => {
     },
   };
 
+  let clipboardText = '';
   const sandbox = {
     acquireVsCodeApi: () => vscodeMock,
     document: documentMock,
     window: windowMock,
-    navigator: { clipboard: { writeText: async () => {} } },
+    navigator: { clipboard: { writeText: async (text: string) => { clipboardText = text; } } },
     alert: () => {},
     setTimeout: () => {},
     clearTimeout: () => {},
@@ -80,6 +81,7 @@ test('TableWebviewProvider getHtml script executes without error', () => {
     String,
     Number,
     Boolean,
+    Set,
     isNaN,
   };
 
@@ -104,9 +106,9 @@ test('TableWebviewProvider getHtml script executes without error', () => {
         type: 'renderData',
         tableName: 'User',
         result: {
-          rows: [{ id: 1, name: 'Alice' }],
+          rows: [{ id: 1, name: 'Alice' }, { id: 2, name: 'Bob' }],
           fields: [{ name: 'id', type: 'INT', isPrimaryKey: true }, { name: 'name', type: 'VARCHAR' }],
-          totalCount: 1,
+          totalCount: 2,
           costTimeMs: 5,
         },
         params: { page: 1, pageSize: 50 },
@@ -114,4 +116,46 @@ test('TableWebviewProvider getHtml script executes without error', () => {
       }
     });
   }, 'renderData threw error');
+
+  // Test Column Pinning
+  vm.runInContext('togglePinColumn("name")', sandbox);
+  const pinnedFields = vm.runInContext('getDisplayFields()', sandbox);
+  assert.equal(pinnedFields[0].name, 'name', 'pinned column moves to first position');
+  assert.equal(pinnedFields[1].name, 'id', 'unpinned column follows');
+
+  // Unpin column
+  vm.runInContext('togglePinColumn("name")', sandbox);
+  const unpinnedFields = vm.runInContext('getDisplayFields()', sandbox);
+  assert.equal(unpinnedFields[0].name, 'id', 'unpinning restores natural order');
+
+  // Test Range Selection
+  vm.runInContext('selectionStart = { row: 0, col: 0 }; selectionEnd = { row: 1, col: 1 };', sandbox);
+  const bounds = vm.runInContext('getSelectionBounds()', sandbox);
+  assert.equal(bounds.minRow, 0);
+  assert.equal(bounds.maxRow, 1);
+  assert.equal(bounds.minCol, 0);
+  assert.equal(bounds.maxCol, 1);
+
+  // Test Copy Selected Range as TSV
+  vm.runInContext('copySelectedRange("tsv")', sandbox);
+  assert.ok(clipboardText.includes('id\tname'), 'TSV includes header row');
+  assert.ok(clipboardText.includes('1\tAlice'), 'TSV includes first data row');
+  assert.ok(clipboardText.includes('2\tBob'), 'TSV includes second data row');
+
+  // Test Copy Selected Range as Markdown
+  vm.runInContext('copySelectedRange("markdown")', sandbox);
+  assert.ok(clipboardText.includes('| id | name |'), 'Markdown includes table header');
+  assert.ok(clipboardText.includes('| 1 | Alice |'), 'Markdown includes table row');
+
+  // Test Copy Selected Range as JSON
+  vm.runInContext('copySelectedRange("json")', sandbox);
+  const parsedJson = JSON.parse(clipboardText);
+  assert.equal(parsedJson.length, 2);
+  assert.equal(parsedJson[0].name, 'Alice');
+
+  // Test Escape clears selection
+  const keydownHandler = windowMock.handlers['keydown'];
+  assert.ok(keydownHandler, 'keydown handler registered');
+  keydownHandler({ key: 'Escape', ctrlKey: false, metaKey: false });
+  assert.equal(vm.runInContext('getSelectionBounds()', sandbox), null, 'Escape clears cell selection');
 });

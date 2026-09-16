@@ -1,7 +1,7 @@
 import fs from 'fs';
 import { BaseDriver, ForeignKeyInfo } from './BaseDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
-import { ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
+import { BoundStatement, ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
 import { buildPagedQuery, finishPage } from '../sql/PagedQuery.js';
 import { quoteId } from '../sql/RowWriter.js';
 
@@ -157,6 +157,21 @@ export class DuckdbDriver extends BaseDriver {
       costTimeMs,
       affectedRows,
     };
+  }
+
+  public override async executeTransaction(statements: BoundStatement[]): Promise<void> {
+    if (statements.length === 0) return;
+    await this.connect();
+    await this.allAsync('BEGIN TRANSACTION;');
+    try {
+      for (const stmt of statements) {
+        await this.allAsync(stmt.sql, stmt.params);
+      }
+      await this.allAsync('COMMIT;');
+    } catch (err) {
+      await this.allAsync('ROLLBACK;').catch(() => {});
+      throw err;
+    }
   }
 
   async getDatabases(): Promise<string[]> {

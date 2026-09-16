@@ -1,5 +1,5 @@
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
-import { ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
+import { BoundStatement, ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
 import { ConnectionState } from './ConnectionState.js';
 
 export interface ForeignKeyInfo {
@@ -219,5 +219,20 @@ export abstract class BaseDriver {
 
   public get supportsParameterizedQueries(): boolean {
     return false;
+  }
+
+  /**
+   * Executes multiple statements atomically within a transaction where supported.
+   * If any statement fails, the entire batch is rolled back.
+   */
+  public async executeTransaction(statements: BoundStatement[]): Promise<void> {
+    if (statements.length === 0) return;
+    for (const stmt of statements) {
+      if (this.supportsParameterizedQueries) {
+        await this.executeParameterized(stmt.sql, stmt.params);
+      } else {
+        await this.executeQuery(stmt.sql);
+      }
+    }
   }
 }

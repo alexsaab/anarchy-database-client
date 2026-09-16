@@ -1,7 +1,7 @@
 import mysql from 'mysql2/promise';
 import { BaseDriver, ForeignKeyInfo, RoutineInfo, TriggerInfo } from './BaseDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
-import { ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
+import { BoundStatement, ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
 import { buildPagedQuery, finishPage, renumber } from '../sql/PagedQuery.js';
 
 export class MysqlDriver extends BaseDriver {
@@ -427,6 +427,28 @@ export class MysqlDriver extends BaseDriver {
       affectedRows: (results as any)?.affectedRows || 0,
       costTimeMs,
     };
+  }
+
+  public override async executeTransaction(statements: BoundStatement[]): Promise<void> {
+    if (statements.length === 0) return;
+    return this.withReconnect(async () => {
+      return this.runOnConnection(async (conn) => {
+        await conn.beginTransaction();
+        try {
+          for (const stmt of statements) {
+            if (stmt.params && stmt.params.length > 0) {
+              await conn.execute(stmt.sql, stmt.params);
+            } else {
+              await conn.query(stmt.sql);
+            }
+          }
+          await conn.commit();
+        } catch (err) {
+          await conn.rollback().catch(() => {});
+          throw err;
+        }
+      });
+    });
   }
 
   async getTableData(tableName: string, params: PageParams, schemaName?: string): Promise<QueryResult> {

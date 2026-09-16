@@ -1,7 +1,7 @@
 import pg from 'pg';
 import { BaseDriver, ForeignKeyInfo, RoutineInfo, TriggerInfo } from './BaseDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
-import { ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
+import { BoundStatement, ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
 import { buildPagedQuery, finishPage, renumber } from '../sql/PagedQuery.js';
 
 export class PostgresDriver extends BaseDriver {
@@ -303,6 +303,28 @@ export class PostgresDriver extends BaseDriver {
           costTimeMs: Date.now() - startTime,
         };
       }, queryId);
+    });
+  }
+
+  public override async executeTransaction(statements: BoundStatement[]): Promise<void> {
+    if (statements.length === 0) return;
+    return this.withReconnect(async () => {
+      return this.runOnClient(async (client) => {
+        await client.query('BEGIN');
+        try {
+          for (const stmt of statements) {
+            if (stmt.params && stmt.params.length > 0) {
+              await client.query(stmt.sql, stmt.params);
+            } else {
+              await client.query(stmt.sql);
+            }
+          }
+          await client.query('COMMIT');
+        } catch (err) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw err;
+        }
+      });
     });
   }
 

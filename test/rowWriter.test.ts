@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RowWriter, quoteId, formatTableRef, inlineParams } from '../src/sql/RowWriter.js';
+import { RowWriter, quoteId, formatTableRef, inlineParams, buildLimitOneQuery } from '../src/sql/RowWriter.js';
 
 const pg = { placeholder: (i: number) => `$${i}` };
 const qm = { placeholder: () => '?' };
@@ -82,4 +82,18 @@ test('updateMultiple binds multiple columns and every key column', () => {
   const { sql, params } = w.updateMultiple({ name: 'Alice', age: 30 }, { id: 42 });
   assert.equal(sql, 'UPDATE "public"."users" SET "name" = $1, "age" = $2 WHERE "id" = $3;');
   assert.deepEqual(params, ['Alice', 30, 42]);
+});
+
+test('buildLimitOneQuery adapts TOP 1 for SQLServer and LIMIT 1 for other dialects', () => {
+  const mssqlQuery = buildLimitOneQuery('SQLServer', '[dbo].[users]', '[id] = @p1');
+  assert.equal(mssqlQuery, 'SELECT TOP 1 * FROM [dbo].[users] WHERE [id] = @p1');
+
+  const pgQuery = buildLimitOneQuery('PostgreSQL', '"public"."users"', '"id" = $1');
+  assert.equal(pgQuery, 'SELECT * FROM "public"."users" WHERE "id" = $1 LIMIT 1');
+
+  const mysqlQuery = buildLimitOneQuery('MySQL', '`users`', '`id` = ?');
+  assert.equal(mysqlQuery, 'SELECT * FROM `users` WHERE `id` = ? LIMIT 1');
+
+  const sqliteQuery = buildLimitOneQuery('SQLite', '"users"', '"id" = ?');
+  assert.equal(sqliteQuery, 'SELECT * FROM "users" WHERE "id" = ? LIMIT 1');
 });

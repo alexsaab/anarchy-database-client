@@ -19,6 +19,30 @@ export class DataFormatService {
   }
 
   /**
+   * Formats rows as Tab-Separated Values (TSV).
+   */
+  public static toTsv(rows: any[], fields?: ColumnInfo[]): string {
+    if (!rows || rows.length === 0) return '';
+    const colNames = fields && fields.length > 0 ? fields.map((f) => f.name) : Object.keys(rows[0]);
+    if (colNames.length === 0) return '';
+
+    const lines = [colNames.join('\t')];
+    rows.forEach((r) => {
+      lines.push(
+        colNames
+          .map((c) => {
+            const v = r[c];
+            if (v === null || v === undefined) return 'NULL';
+            if (typeof v === 'object') return JSON.stringify(v);
+            return String(v).replace(/\t/g, ' ').replace(/\r?\n/g, ' ');
+          })
+          .join('\t')
+      );
+    });
+    return lines.join('\n');
+  }
+
+  /**
    * Formats rows as SQL INSERT statements.
    */
   public static toSqlInsert(tableName: string, rows: any[], fields?: ColumnInfo[]): string {

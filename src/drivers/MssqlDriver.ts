@@ -1,6 +1,6 @@
 import { BaseDriver, ForeignKeyInfo, RoutineInfo, TriggerInfo } from './BaseDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
-import { ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
+import { BoundStatement, ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
 import { buildPagedQuery, finishPage, renumber } from '../sql/PagedQuery.js';
 
 /** Microsoft SQL Server / Azure SQL. */
@@ -180,6 +180,28 @@ export class MssqlDriver extends BaseDriver {
         if (queryId != null) {
           this.running.delete(queryId);
         }
+      }
+    });
+  }
+
+  public override async executeTransaction(statements: BoundStatement[]): Promise<void> {
+    if (statements.length === 0) return;
+    return this.withReconnect(async () => {
+      const pool = await this.acquirePool();
+      const transaction = pool.transaction();
+      await transaction.begin();
+      try {
+        for (const stmt of statements) {
+          const request = transaction.request();
+          if (stmt.params && stmt.params.length > 0) {
+            stmt.params.forEach((value, i) => request.input(`p${i + 1}`, value));
+          }
+          await request.query(stmt.sql);
+        }
+        await transaction.commit();
+      } catch (err) {
+        await transaction.rollback().catch(() => {});
+        throw err;
       }
     });
   }

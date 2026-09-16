@@ -22,6 +22,13 @@ test('DataFormatService formats as Markdown table', () => {
   assert.match(md, /Bob O'Connor/);
 });
 
+test('DataFormatService formats as TSV table', () => {
+  const tsv = DataFormatService.toTsv(mockRows, mockFields);
+  assert.match(tsv, /^id\tname\tis_active\tbalance\n/);
+  assert.match(tsv, /1\tAlice\ttrue\t150\.5/);
+  assert.match(tsv, /2\tBob O'Connor\tfalse\tNULL/);
+});
+
 test('DataFormatService formats as SQL INSERT statements', () => {
   const sql = DataFormatService.toSqlInsert('users', mockRows, mockFields);
   assert.match(sql, /INSERT INTO `users` \(`id`, `name`, `is_active`, `balance`\) VALUES \(1, 'Alice', TRUE, 150.5\);/);

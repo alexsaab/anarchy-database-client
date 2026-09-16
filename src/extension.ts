@@ -297,11 +297,15 @@ export function activate(context: vscode.ExtensionContext) {
                 });
               }
             } catch (err: any) {
-              vscode.window.showWarningMessage(`Failed to list tables in ${db}: ${err.message}`);
+              vscode.window.showWarningMessage(
+                t(`Failed to list tables in ${db}: ${err.message}`, `Не удалось получить список таблиц в ${db}: ${err.message}`)
+              );
             }
           }
         } catch (err: any) {
-          vscode.window.showWarningMessage(`Failed to connect to ${profile.name}: ${err.message}`);
+          vscode.window.showWarningMessage(
+            t(`Failed to connect to ${profile.name}: ${err.message}`, `Не удалось подключиться к ${profile.name}: ${err.message}`)
+          );
         }
       }
 
@@ -362,7 +366,9 @@ export function activate(context: vscode.ExtensionContext) {
           const doc = await vscode.workspace.openTextDocument({ language: 'sql', content: scriptSql });
           await vscode.window.showTextDocument(doc);
         } catch (e: any) {
-          vscode.window.showErrorMessage(`Failed to open DDL script: ${e.message}`);
+          vscode.window.showErrorMessage(
+            t(`Failed to open DDL script: ${e.message}`, `Не удалось открыть DDL-скрипт: ${e.message}`)
+          );
         }
       }
     })
@@ -804,7 +810,69 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  const activeEditorConnections = new Map<string, string>();
+  const activeEditorConnections = new Map<string, ConnectionConfig>();
+
+  const sqlEditorStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 101);
+  sqlEditorStatusBar.command = 'dbClient.chooseEditorConnection';
+  context.subscriptions.push(sqlEditorStatusBar);
+
+  const updateSqlEditorStatusBar = (editor?: vscode.TextEditor) => {
+    if (!editor || (editor.document.languageId !== 'sql' && !editor.document.fileName.endsWith('.sql'))) {
+      sqlEditorStatusBar.hide();
+      return;
+    }
+
+    const docUri = editor.document.uri.toString();
+    const connections = storageService.getConnections();
+
+    if (connections.length === 0) {
+      sqlEditorStatusBar.text = `$(database) ${t('No Connections', 'Нет подключений')}`;
+      sqlEditorStatusBar.tooltip = t('No database connections configured. Click to add.', 'Нет подключений к БД. Нажмите, чтобы добавить.');
+      sqlEditorStatusBar.command = 'dbClient.addConnection';
+      sqlEditorStatusBar.show();
+      return;
+    }
+
+    sqlEditorStatusBar.command = 'dbClient.chooseEditorConnection';
+
+    let target = activeEditorConnections.get(docUri);
+    if (!target && connections.length === 1) {
+      target = connections[0];
+      activeEditorConnections.set(docUri, target);
+    }
+
+    if (target) {
+      const dbLabel = target.database || target.dbPath || 'default';
+      sqlEditorStatusBar.text = `$(database) ${target.name} [${dbLabel}]`;
+      sqlEditorStatusBar.tooltip = t(
+        `Active SQL Connection: ${target.name} (${target.type})\nDatabase: ${dbLabel}\nClick to switch connection or database`,
+        `Активное подключение: ${target.name} (${target.type})\nБаза данных: ${dbLabel}\nНажмите для смены подключения или БД`
+      );
+    } else {
+      sqlEditorStatusBar.text = `$(database) ${t('Select Database', 'Выбрать БД')}`;
+      sqlEditorStatusBar.tooltip = t('Click to select database connection for this SQL file', 'Нажмите для выбора подключения для этого SQL-файла');
+    }
+
+    sqlEditorStatusBar.show();
+  };
+
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      updateSqlEditorStatusBar(editor);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.workspace.onDidOpenTextDocument((doc) => {
+      if (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document === doc) {
+        updateSqlEditorStatusBar(vscode.window.activeTextEditor);
+      }
+    })
+  );
+
+  if (vscode.window.activeTextEditor) {
+    updateSqlEditorStatusBar(vscode.window.activeTextEditor);
+  }
 
   const resolveTargetConnection = async (
     editor: vscode.TextEditor,
@@ -829,13 +897,13 @@ export function activate(context: vscode.ExtensionContext) {
       return undefined;
     }
 
-    const trackedId = activeEditorConnections.get(docUri);
-    let target = trackedId ? connections.find((c) => c.id === trackedId) : undefined;
+    let target = activeEditorConnections.get(docUri);
 
     if (!target) {
       if (connections.length === 1) {
         target = connections[0];
-        activeEditorConnections.set(docUri, target.id);
+        activeEditorConnections.set(docUri, target);
+        updateSqlEditorStatusBar(editor);
       } else {
         const items = connections.map((c) => ({
           label: `$(database) ${c.name}`,
@@ -847,7 +915,8 @@ export function activate(context: vscode.ExtensionContext) {
         });
         if (!picked) return undefined;
         target = picked.connection;
-        activeEditorConnections.set(docUri, target.id);
+        activeEditorConnections.set(docUri, target);
+        updateSqlEditorStatusBar(editor);
       }
     }
 
@@ -908,7 +977,10 @@ export function activate(context: vscode.ExtensionContext) {
       if (!editor) return;
       const docUri = editor.document.uri.toString();
       const connections = storageService.getConnections();
-      if (connections.length === 0) return;
+      if (connections.length === 0) {
+        vscode.window.showInformationMessage(t('No database connections configured.', 'Нет настроенных подключений.'));
+        return;
+      }
       const items = connections.map((c) => ({
         label: `$(database) ${c.name}`,
         description: `${c.type} — ${c.database || c.dbPath || c.host || ''}`,
@@ -917,13 +989,35 @@ export function activate(context: vscode.ExtensionContext) {
       const picked = await vscode.window.showQuickPick(items, {
         placeHolder: t('Switch database connection for this editor', 'Сменить подключение к БД для этого редактора'),
       });
-      if (picked) {
-        activeEditorConnections.set(docUri, picked.connection.id);
-        vscode.window.showInformationMessage(
-          t(`Connected "${path.basename(editor.document.fileName)}" to ${picked.connection.name}`,
-            `Файл "${path.basename(editor.document.fileName)}" привязан к ${picked.connection.name}`)
-        );
-      }
+      if (!picked) return;
+
+      let chosenConfig = picked.connection;
+      try {
+        const pass = await storageService.getPassword(chosenConfig.id);
+        const sshPass = await storageService.getSshPassword(chosenConfig.id);
+        const driver = await DriverManager.getInstance().getDriver(chosenConfig, pass, sshPass);
+        const dbs = await driver.getDatabases().catch(() => []);
+        if (dbs && dbs.length > 1) {
+          const dbItems = dbs.map((d) => ({
+            label: `$(database) ${d}`,
+            description: d === chosenConfig.database ? t('Default database', 'База данных по умолчанию') : '',
+            dbName: d,
+          }));
+          const pickedDb = await vscode.window.showQuickPick(dbItems, {
+            placeHolder: t(`Select database on ${chosenConfig.name}`, `Выберите базу данных на ${chosenConfig.name}`),
+          });
+          if (pickedDb) {
+            chosenConfig = { ...chosenConfig, database: pickedDb.dbName };
+          }
+        }
+      } catch {}
+
+      activeEditorConnections.set(docUri, chosenConfig);
+      updateSqlEditorStatusBar(editor);
+      vscode.window.showInformationMessage(
+        t(`Connected "${path.basename(editor.document.fileName)}" to ${chosenConfig.name}${chosenConfig.database ? ` [${chosenConfig.database}]` : ''}`,
+          `Файл "${path.basename(editor.document.fileName)}" привязан к ${chosenConfig.name}${chosenConfig.database ? ` [${chosenConfig.database}]` : ''}`)
+      );
     })
   );
 

@@ -41,19 +41,23 @@ export class ClickhouseDriver extends BaseDriver {
 
       const protocol = endpoint.protocol === 'https' ? https : http;
 
-      const path = `${endpoint.basePath}/?query=${encodeURIComponent(query)}`;
+      const basePath = endpoint.basePath ? endpoint.basePath.replace(/\/+$/, '') : '';
+      const path = `${basePath}/`;
       const authHeader = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
+      const bodyBuffer = Buffer.from(query, 'utf-8');
 
       const req = protocol.request(
         {
           hostname: host,
           port: port,
           path: path,
-          method: 'GET',
+          method: 'POST',
           headers: {
             Authorization: authHeader,
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Content-Length': String(bodyBuffer.length),
           },
-          timeout: 5000,
+          timeout: 30000,
         },
         (res) => {
           let body = '';
@@ -78,6 +82,7 @@ export class ClickhouseDriver extends BaseDriver {
         req.destroy();
         reject(new Error('ClickHouse request timed out'));
       });
+      req.write(bodyBuffer);
       req.end();
     });
   }
@@ -179,7 +184,8 @@ export class ClickhouseDriver extends BaseDriver {
 
     sql += ` LIMIT ${params.pageSize} OFFSET ${offset} FORMAT JSON;`;
 
-    const countRes = await this.httpQuery(`SELECT count() as total FROM \`${db}\`.\`${tableName}\` FORMAT JSON;`);
+    const countSql = `SELECT count() as total FROM \`${db}\`.\`${tableName}\`${params.filterSql ? ` WHERE ${params.filterSql}` : ''} FORMAT JSON;`;
+    const countRes = await this.httpQuery(countSql);
     const totalCount = parseInt(countRes?.data?.[0]?.total || '0', 10);
 
     const queryResult = await this.executeQuery(sql);

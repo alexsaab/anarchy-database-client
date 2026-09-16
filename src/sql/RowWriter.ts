@@ -1,9 +1,7 @@
 import { BaseDriver } from '../drivers/BaseDriver.js';
+import { BoundStatement } from '../model/QueryTypes.js';
 
-export interface BoundStatement {
-  sql: string;
-  params: any[];
-}
+export { BoundStatement };
 
 /** Minimal surface a RowWriter needs, so tests do not need a live driver. */
 export interface Dialect {
@@ -19,6 +17,17 @@ export function quoteId(dbType: string, name: string): string {
     return `[${String(name).replace(/]/g, ']]')}]`;
   }
   return `"${String(name).replace(/"/g, '""')}"`;
+}
+
+/**
+ * Builds a query selecting a single row, adapting to dialects like SQL Server (SELECT TOP 1)
+ * versus dialects that use LIMIT 1 (PostgreSQL, MySQL, SQLite, DuckDB).
+ */
+export function buildLimitOneQuery(dbType: string, targetRef: string, whereClause: string): string {
+  if (dbType === 'SQLServer') {
+    return `SELECT TOP 1 * FROM ${targetRef} WHERE ${whereClause}`;
+  }
+  return `SELECT * FROM ${targetRef} WHERE ${whereClause} LIMIT 1`;
 }
 
 export function formatTableRef(dbType: string, tableName: string, schemaName?: string, databaseName?: string): string {

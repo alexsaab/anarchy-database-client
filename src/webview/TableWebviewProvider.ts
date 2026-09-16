@@ -1,12 +1,12 @@
 import * as vscode from 'vscode';
 import { DriverManager } from '../drivers/DriverManager.js';
 import { BaseDriver, ForeignKeyInfo } from '../drivers/BaseDriver.js';
-import { RowWriter, formatTableRef, quoteId, runBound } from '../sql/RowWriter.js';
+import { RowWriter, buildLimitOneQuery, formatTableRef, quoteId, runBound } from '../sql/RowWriter.js';
 import { cursorFrom, keyColumnsFor } from '../sql/Keyset.js';
 import { ConnectionState } from '../drivers/ConnectionState.js';
 import { TableNode } from '../tree/TableNode.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
-import { ColumnInfo, PageParams, QueryResult } from '../model/QueryTypes.js';
+import { BoundStatement, ColumnInfo, PageParams, QueryResult } from '../model/QueryTypes.js';
 import { ExportService } from '../export/ExportService.js';
 import { DataFormatService } from '../export/DataFormatService.js';
 import { QueryHistoryStorage } from '../storage/QueryHistoryStorage.js';
@@ -198,7 +198,9 @@ export class TableWebviewProvider {
         if (connectionLost) {
           ConnectionState.getInstance().markLost(connectionConfig.id, errMsg);
         } else {
-          vscode.window.showErrorMessage(`Failed to load data for ${tableName}: ${errMsg}`);
+          vscode.window.showErrorMessage(
+            t(`Failed to load data for ${tableName}: ${errMsg}`, `Не удалось загрузить данные для ${tableName}: ${errMsg}`)
+          );
         }
         if (!isDisposed) {
           panel.webview.postMessage({
@@ -235,6 +237,9 @@ export class TableWebviewProvider {
           const fields: ColumnInfo[] = Array.isArray(msg.fields) ? msg.fields : [];
           let text = '';
           switch (msg.format) {
+            case 'tsv':
+              text = DataFormatService.toTsv(rows, fields);
+              break;
             case 'markdown':
               text = DataFormatService.toMarkdown(rows, fields);
               break;
@@ -439,7 +444,7 @@ export class TableWebviewProvider {
             await loadData();
           } catch (e: any) {
             const verb = msg.type === 'insertRow' ? 'Insert' : msg.type === 'deleteRow' ? 'Delete' : 'Update';
-            vscode.window.showErrorMessage(`${verb} failed: ${e.message}`);
+            vscode.window.showErrorMessage(t(`${verb} failed: ${e.message}`, `Операция ${verb} завершилась с ошибкой: ${e.message}`));
           }
           break;
         case 'applyStagedChanges': {
@@ -489,14 +494,19 @@ export class TableWebviewProvider {
               byRow.get(keyStr)!.updates[ch.colName] = ch.newVal;
             }
 
-            for (const { rowKey, updates } of byRow.values()) {
-              if (nativeWrites) {
+            if (nativeWrites) {
+              for (const { rowKey, updates } of byRow.values()) {
                 for (const col of Object.keys(updates)) {
                   await driver.updateRowNative(tableName, rowKey, col, updates[col], schemaName);
                 }
-              } else {
-                await runBound(driver, writer.updateMultiple(updates, rowKey));
               }
+            } else {
+              const statements: BoundStatement[] = [];
+              for (const { rowKey, updates } of byRow.values()) {
+                const writer = new RowWriter(driver, dbType, tableRef);
+                statements.push(writer.updateMultiple(updates, rowKey));
+              }
+              await driver.executeTransaction(statements);
             }
 
             vscode.window.showInformationMessage(
@@ -514,8 +524,10 @@ export class TableWebviewProvider {
             const driver = await DriverManager.getInstance().getDriver(connectionConfig, password, sshPassword);
             const targetRef = formatTableRef(dbType, targetTable, schemaName, connectionConfig.database);
             const colRef = quoteId(dbType, targetColumn);
-            const querySql = `SELECT * FROM ${targetRef} WHERE ${colRef} = ? LIMIT 1`;
-            const peekRes = await driver.executeParameterized(querySql, [value]);
+            const placeholder = driver.supportsParameterizedQueries ? driver.placeholder(1) : '?';
+            const whereClause = `${colRef} = ${placeholder}`;
+            const querySql = buildLimitOneQuery(dbType, targetRef, whereClause);
+            const peekRes = await runBound(driver, { sql: querySql, params: [value] });
             const row = peekRes.rows && peekRes.rows.length > 0 ? peekRes.rows[0] : null;
             panel.webview.postMessage({ type: 'peekFkResult', reqId, targetTable, targetColumn, row });
           } catch (err: any) {
@@ -746,6 +758,11 @@ export class TableWebviewProvider {
       copyJson: ru ? 'Копировать' : 'Copy',
       stageChange: ru ? 'Отложить (Stage)' : 'Stage Change',
       saveImmediate: ru ? 'Сохранить сейчас' : 'Save Immediately',
+      pinColumn: ru ? 'Закрепить колонку' : 'Pin column',
+      unpinColumn: ru ? 'Открепить колонку' : 'Unpin column',
+      copyRange: ru ? 'Скопировать выделенное (Ctrl+C)' : 'Copy selected range (Ctrl+C)',
+      rangeCopied: ru ? 'Диапазон скопирован в буфер!' : 'Selected range copied to clipboard!',
+      cellCopied: ru ? 'Ячейка скопирована!' : 'Cell copied to clipboard!',
     };
 
     return `<!DOCTYPE html>
@@ -986,6 +1003,91 @@ export class TableWebviewProvider {
       background-color: var(--vscode-list-hoverBackground, rgba(255,255,255,0.1));
       cursor: pointer;
     }
+    .pin-icon {
+      font-size: 11px;
+      margin-left: 6px;
+      cursor: pointer;
+      opacity: 0.35;
+      transition: opacity 0.15s, transform 0.15s;
+    }
+    .pin-icon:hover {
+      opacity: 1;
+      transform: scale(1.2);
+    }
+    .pin-icon.pinned {
+      opacity: 1;
+      color: #38bdf8;
+    }
+    th.col-idx, td.col-idx {
+      position: sticky;
+      left: 0;
+      width: 48px;
+      min-width: 48px;
+      max-width: 48px;
+      text-align: center;
+      z-index: 13;
+      background: var(--vscode-editorHeader-noTabsBackground, #252526);
+    }
+    td.col-idx {
+      z-index: 3;
+      background: var(--vscode-editor-background, #1e1e1e);
+      color: var(--vscode-descriptionForeground, #888);
+    }
+    th.pinned-col {
+      position: sticky;
+      min-width: 120px;
+      z-index: 12 !important;
+      background: var(--vscode-editorHeader-noTabsBackground, #252526) !important;
+    }
+    td.pinned-col {
+      position: sticky;
+      min-width: 120px;
+      z-index: 2 !important;
+      background: var(--vscode-editor-background, #1e1e1e) !important;
+    }
+    th.pinned-col-last, td.pinned-col-last {
+      border-right: 2px solid var(--vscode-focusBorder, #007fd4) !important;
+      box-shadow: 4px 0 8px rgba(0, 0, 0, 0.3);
+    }
+    .cell-selected {
+      background-color: var(--vscode-editor-selectionBackground, rgba(59, 130, 246, 0.32)) !important;
+      color: var(--vscode-editor-selectionForeground, inherit);
+      user-select: none;
+    }
+    td.sel-top {
+      border-top: 2px solid var(--vscode-focusBorder, #007fd4) !important;
+    }
+    td.sel-bottom {
+      border-bottom: 2px solid var(--vscode-focusBorder, #007fd4) !important;
+    }
+    td.sel-left {
+      border-left: 2px solid var(--vscode-focusBorder, #007fd4) !important;
+    }
+    td.sel-right {
+      border-right: 2px solid var(--vscode-focusBorder, #007fd4) !important;
+    }
+    #toast {
+      visibility: hidden;
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--vscode-notifications-background, #252526);
+      color: var(--vscode-notifications-foreground, #fff);
+      border: 1px solid var(--vscode-notifications-border, #007acc);
+      padding: 8px 18px;
+      border-radius: 6px;
+      font-size: 13px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      z-index: 3000;
+      opacity: 0;
+      transition: opacity 0.2s, visibility 0.2s;
+      pointer-events: none;
+    }
+    #toast.show {
+      visibility: visible;
+      opacity: 1;
+    }
     .info {
       margin-left: auto;
       font-size: 12px;
@@ -1086,8 +1188,10 @@ export class TableWebviewProvider {
     <button class="secondary" onclick="exportData('sql')">SQL</button>
     <button class="secondary" onclick="exportData('xlsx')">Excel</button>
 
+    <button id="copyRangeBtn" class="secondary" onclick="copySelectedRange('tsv')" title="${text.copyRange}">📋 ${ru ? "Копировать" : "Copy"}</button>
     <select id="copyAsSelect" onchange="if (this.value) { copyAs(this.value); this.value = ''; }">
       <option value="">${text.copyAs}</option>
+      <option value="tsv">${ru ? "TSV (Таблица / Excel)" : "TSV (Spreadsheet / Excel)"}</option>
       <option value="markdown">Markdown Table</option>
       <option value="sql">SQL INSERT</option>
       <option value="json">JSON Array</option>
@@ -1166,6 +1270,8 @@ export class TableWebviewProvider {
     </div>
   </div>
 
+  <div id="toast"></div>
+
   <script>
     const vscode = acquireVsCodeApi();
     let currentPage = 1;
@@ -1181,6 +1287,84 @@ export class TableWebviewProvider {
     let currentForeignKeys = [];
     let stagedChanges = {};
     let activePeekReqId = 0;
+    let pinnedColumns = new Set();
+    let selectionStart = null;
+    let selectionEnd = null;
+    let isSelecting = false;
+    let cellMatrix = [];
+
+    function getDisplayFields() {
+      const pinned = currentFields.filter(f => pinnedColumns.has(f.name));
+      const unpinned = currentFields.filter(f => !pinnedColumns.has(f.name));
+      return pinned.concat(unpinned);
+    }
+
+    function togglePinColumn(fieldName) {
+      if (pinnedColumns.has(fieldName)) {
+        pinnedColumns.delete(fieldName);
+        showToast('${ru ? "Колонка откреплена: " : "Column unpinned: "}' + fieldName);
+      } else {
+        pinnedColumns.add(fieldName);
+        showToast('${ru ? "Колонка закреплена: " : "Column pinned: "}' + fieldName);
+      }
+      renderTableHead();
+      renderRows(allRows);
+    }
+
+    function getSelectionBounds() {
+      if (!selectionStart || !selectionEnd) return null;
+      const minRow = Math.min(selectionStart.row, selectionEnd.row);
+      const maxRow = Math.max(selectionStart.row, selectionEnd.row);
+      const minCol = Math.min(selectionStart.col, selectionEnd.col);
+      const maxCol = Math.max(selectionStart.col, selectionEnd.col);
+      return { minRow, maxRow, minCol, maxCol };
+    }
+
+    function clearSelection() {
+      selectionStart = null;
+      selectionEnd = null;
+      isSelecting = false;
+      updateSelectionUi();
+    }
+
+    function updateSelectionUi() {
+      const bounds = getSelectionBounds();
+      for (let r = 0; r < cellMatrix.length; r++) {
+        const rowCells = cellMatrix[r] || [];
+        for (let c = 0; c < rowCells.length; c++) {
+          const td = rowCells[c];
+          if (!td || !td.classList) continue;
+          if (td.classList.remove) {
+            td.classList.remove('cell-selected', 'sel-top', 'sel-bottom', 'sel-left', 'sel-right');
+          }
+          if (bounds && r >= bounds.minRow && r <= bounds.maxRow && c >= bounds.minCol && c <= bounds.maxCol) {
+            if (td.classList.add) {
+              td.classList.add('cell-selected');
+              if (r === bounds.minRow) td.classList.add('sel-top');
+              if (r === bounds.maxRow) td.classList.add('sel-bottom');
+              if (c === bounds.minCol) td.classList.add('sel-left');
+              if (c === bounds.maxCol) td.classList.add('sel-right');
+            }
+          }
+        }
+      }
+    }
+
+    let toastTimer = null;
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      if (!toast) return;
+      toast.textContent = msg;
+      if (toast.classList && toast.classList.add) {
+        toast.classList.add('show');
+      }
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        if (toast.classList && toast.classList.remove) {
+          toast.classList.remove('show');
+        }
+      }, 2200);
+    }
 
     function escapeHtml(text) {
       if (text === null || text === undefined) return '';
@@ -1844,15 +2028,149 @@ export class TableWebviewProvider {
       return key;
     }
 
+    function copySelectedRange(format) {
+      const bounds = getSelectionBounds();
+      if (!bounds) {
+        copyAs(format || 'tsv');
+        return;
+      }
+      const displayFields = getDisplayFields();
+      const selFields = displayFields.slice(bounds.minCol, bounds.maxCol + 1);
+      const selRows = allRows.slice(bounds.minRow, bounds.maxRow + 1);
+      if (selRows.length === 0 || selFields.length === 0) return;
+
+      const fmt = format || 'tsv';
+      let outText = '';
+
+      if (fmt === 'tsv') {
+        const includeHeaders = (bounds.maxRow > bounds.minRow || bounds.maxCol > bounds.minCol);
+        const lines = [];
+        if (includeHeaders) {
+          lines.push(selFields.map(f => f.name).join('\\t'));
+        }
+        selRows.forEach(r => {
+          lines.push(selFields.map(f => {
+            const v = r[f.name];
+            if (v === null || v === undefined) return 'NULL';
+            if (typeof v === 'object') return JSON.stringify(v);
+            return String(v).replace(/\\t/g, ' ').replace(/\\r?\\n/g, ' ');
+          }).join('\\t'));
+        });
+        outText = lines.join('\\n');
+      } else if (fmt === 'markdown') {
+        const colNames = selFields.map(f => f.name);
+        outText = '| ' + colNames.join(' | ') + ' |\\n| ' + colNames.map(() => '---').join(' | ') + ' |\\n';
+        outText += selRows.map(r => '| ' + colNames.map(c => (r[c] === null || r[c] === undefined ? 'NULL' : String(r[c]))).join(' | ') + ' |').join('\\n');
+      } else if (fmt === 'json') {
+        const data = selRows.map(r => {
+          const obj = {};
+          selFields.forEach(f => { obj[f.name] = r[f.name]; });
+          return obj;
+        });
+        outText = JSON.stringify(data, null, 2);
+      } else if (fmt === 'sql') {
+        const colNames = selFields.map(f => '"' + f.name + '"').join(', ');
+        outText = selRows.map(r => {
+          const vals = selFields.map(f => {
+            const v = r[f.name];
+            if (v === null || v === undefined) return 'NULL';
+            if (typeof v === 'number') return String(v);
+            return "'" + String(v).replace(/'/g, "''") + "'";
+          }).join(', ');
+          return 'INSERT INTO "table" (' + colNames + ') VALUES (' + vals + ');';
+        }).join('\\n');
+      } else if (fmt === 'ts') {
+        const lines = selFields.map(f => {
+          let t = 'string';
+          const type = (f.type || '').toLowerCase();
+          if (type.includes('int') || type.includes('float') || type.includes('decimal') || type.includes('numeric')) t = 'number';
+          else if (type.includes('bool')) t = 'boolean';
+          return '  ' + f.name + (f.nullable ? '?: ' : ': ') + t + ';';
+        });
+        outText = 'export interface SelectedData {\\n' + lines.join('\\n') + '\\n}';
+      }
+
+      if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(outText);
+      }
+      showToast('${ru ? "Скопировано в буфер обмена!" : "Copied to clipboard!"}');
+    }
+
+    function renderTableHead() {
+      const headTr = document.getElementById('tableHead');
+      headTr.innerHTML = '';
+
+      const thNum = document.createElement('th');
+      thNum.className = 'col-idx';
+      thNum.textContent = '#';
+      headTr.appendChild(thNum);
+
+      const displayFields = getDisplayFields();
+      const sortTitlePrefix = '${ru ? 'Нажмите для сортировки по полю' : 'Click to sort by'}';
+
+      let pinnedLeft = 48;
+      const pinnedList = displayFields.filter(f => pinnedColumns.has(f.name));
+      let curPinnedIdx = 0;
+
+      displayFields.forEach(f => {
+        const th = document.createElement('th');
+        th.className = 'sortable';
+        const isPinned = pinnedColumns.has(f.name);
+        if (isPinned) {
+          th.classList.add('pinned-col');
+          th.style.left = pinnedLeft + 'px';
+          if (curPinnedIdx === pinnedList.length - 1) {
+            th.classList.add('pinned-col-last');
+          }
+          curPinnedIdx++;
+          pinnedLeft += 140;
+        }
+
+        let sortIcon = '⬍';
+        if (currentSortField === f.name) {
+          th.classList.add('sorted');
+          sortIcon = currentSortOrder === 'ASC' ? '▲' : '▼';
+        }
+        const isFk = currentForeignKeys.some(k => k.columnName && k.columnName.toLowerCase() === f.name.toLowerCase());
+        th.title = (f.type ? f.type + ' — ' : '') + sortTitlePrefix + ' ' + f.name + (isFk ? ' (Foreign Key)' : '');
+        th.textContent = f.name + (f.isPrimaryKey ? ' 🔑' : '') + (isFk ? ' 🔗' : '') + ' ';
+
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'sort-icon';
+        iconSpan.textContent = sortIcon;
+        th.appendChild(iconSpan);
+
+        const pinBtn = document.createElement('span');
+        pinBtn.className = 'pin-icon' + (isPinned ? ' pinned' : '');
+        pinBtn.textContent = isPinned ? '📍' : '📌';
+        pinBtn.title = isPinned ? '${ru ? "Открепить колонку" : "Unpin column"}' : '${ru ? "Закрепить колонку" : "Pin column"}';
+        pinBtn.onclick = (e) => {
+          e.stopPropagation();
+          togglePinColumn(f.name);
+        };
+        th.appendChild(pinBtn);
+
+        th.onclick = () => toggleSort(f.name);
+        headTr.appendChild(th);
+      });
+
+      const thAction = document.createElement('th');
+      thAction.textContent = 'Action';
+      headTr.appendChild(thAction);
+    }
+
     function renderRows(rows) {
       const editable = keyColumns().length > 0;
       const body = document.getElementById('tableBody');
       body.textContent = '';
+      cellMatrix = [];
+
+      const displayFields = getDisplayFields();
 
       if (!rows || rows.length === 0) {
         const tr = document.createElement('tr');
         const td = document.createElement('td');
-        td.colSpan = Math.max(1, currentFields.length + 2);
+        td.colSpan = Math.max(1, displayFields.length + 2);
         td.style.textAlign = 'center';
         td.style.padding = '30px';
         td.style.opacity = '0.7';
@@ -1862,17 +2180,39 @@ export class TableWebviewProvider {
         return;
       }
 
-      rows.forEach((row, idx) => {
+      const pinnedList = displayFields.filter(f => pinnedColumns.has(f.name));
+
+      rows.forEach((row, rIdx) => {
         const tr = document.createElement('tr');
+        cellMatrix[rIdx] = [];
 
         const tdIdx = document.createElement('td');
-        tdIdx.textContent = (currentPage - 1) * pageSize + idx + 1;
+        tdIdx.className = 'col-idx';
+        tdIdx.textContent = (currentPage - 1) * pageSize + rIdx + 1;
         tr.appendChild(tdIdx);
 
         const rowKey = rowKeyOf(row);
 
-        currentFields.forEach(f => {
+        let pinnedLeft = 48;
+        let curPinnedIdx = 0;
+
+        displayFields.forEach((f, cIdx) => {
           const td = document.createElement('td');
+          cellMatrix[rIdx][cIdx] = td;
+          td.setAttribute('data-row', String(rIdx));
+          td.setAttribute('data-col', String(cIdx));
+
+          const isPinned = pinnedColumns.has(f.name);
+          if (isPinned) {
+            td.classList.add('pinned-col');
+            td.style.left = pinnedLeft + 'px';
+            if (curPinnedIdx === pinnedList.length - 1) {
+              td.classList.add('pinned-col-last');
+            }
+            curPinnedIdx++;
+            pinnedLeft += 140;
+          }
+
           let val = row[f.name];
           if (val === undefined && f.name) {
             const matchKey = Object.keys(row).find(k => k.toLowerCase() === f.name.toLowerCase());
@@ -1963,14 +2303,38 @@ export class TableWebviewProvider {
           }
 
           if (editable) {
-            td.className = 'editable' + (isStaged ? ' staged-modified' : '');
-            td.onclick = () => {
+            td.classList.add('editable');
+            td.title = '${ru ? "Двойной клик для редактирования" : "Double-click to edit"}';
+            td.ondblclick = (e) => {
+              e.stopPropagation();
               const valStr = displayVal === null || displayVal === undefined ? 'null' : (typeof displayVal === 'object' ? JSON.stringify(displayVal) : String(displayVal));
               editCell(f.name, rowKey, valStr);
             };
           } else {
             td.title = '${text.readOnlyHint}';
           }
+
+          // Cell selection mouse handlers
+          td.onmousedown = (e) => {
+            if (e.button !== 0) return;
+            if (e.shiftKey && selectionStart) {
+              selectionEnd = { row: rIdx, col: cIdx };
+              updateSelectionUi();
+            } else {
+              selectionStart = { row: rIdx, col: cIdx };
+              selectionEnd = { row: rIdx, col: cIdx };
+              isSelecting = true;
+              updateSelectionUi();
+            }
+          };
+
+          td.onmouseenter = () => {
+            if (isSelecting) {
+              selectionEnd = { row: rIdx, col: cIdx };
+              updateSelectionUi();
+            }
+          };
+
           tr.appendChild(td);
         });
 
@@ -1986,6 +2350,8 @@ export class TableWebviewProvider {
 
         body.appendChild(tr);
       });
+
+      updateSelectionUi();
     }
 
     window.addEventListener('message', event => {
@@ -2118,37 +2484,7 @@ export class TableWebviewProvider {
 
         document.getElementById('stats').innerText = '${text.stats}: ' + totalCount + ' | ${text.time}: ' + res.costTimeMs + 'ms';
 
-        const headTr = document.getElementById('tableHead');
-        headTr.innerHTML = '';
-
-        const thNum = document.createElement('th');
-        thNum.textContent = '#';
-        headTr.appendChild(thNum);
-
-        const sortTitlePrefix = '${ru ? 'Нажмите для сортировки по полю' : 'Click to sort by'}';
-        currentFields.forEach(f => {
-          const th = document.createElement('th');
-          th.className = 'sortable';
-          let sortIcon = '⬍';
-          if (currentSortField === f.name) {
-            th.classList.add('sorted');
-            sortIcon = currentSortOrder === 'ASC' ? '▲' : '▼';
-          }
-          const isFk = currentForeignKeys.some(k => k.columnName && k.columnName.toLowerCase() === f.name.toLowerCase());
-          th.title = (f.type ? f.type + ' — ' : '') + sortTitlePrefix + ' ' + f.name + (isFk ? ' (Foreign Key)' : '');
-          th.textContent = f.name + (f.isPrimaryKey ? ' 🔑' : '') + (isFk ? ' 🔗' : '') + ' ';
-          const iconSpan = document.createElement('span');
-          iconSpan.className = 'sort-icon';
-          iconSpan.textContent = sortIcon;
-          th.appendChild(iconSpan);
-          th.onclick = () => toggleSort(f.name);
-          headTr.appendChild(th);
-        });
-
-        const thAction = document.createElement('th');
-        thAction.textContent = 'Action';
-        headTr.appendChild(thAction);
-
+        renderTableHead();
         renderRows(allRows);
         updateSummaryBar(allRows);
         if (isChartView) {
@@ -2372,13 +2708,18 @@ export class TableWebviewProvider {
     }
 
     function copyAs(format) {
+      if (getSelectionBounds()) {
+        copySelectedRange(format);
+        return;
+      }
       if (!allRows || allRows.length === 0) {
         alert('${ru ? "Нет данных для копирования" : "No data to copy"}');
         return;
       }
       // The host owns the formatters (DataFormatService) and the real table name,
       // so it renders the text and writes the clipboard.
-      vscode.postMessage({ type: 'copyAs', format, rows: allRows, fields: currentFields });
+      const displayFields = typeof getDisplayFields === 'function' ? getDisplayFields() : currentFields;
+      vscode.postMessage({ type: 'copyAs', format, rows: allRows, fields: displayFields });
     }
 
     window.addEventListener('keydown', (e) => {
@@ -2390,11 +2731,49 @@ export class TableWebviewProvider {
         }
       }
 
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+        if (getSelectionBounds()) {
+          e.preventDefault();
+          copySelectedRange('tsv');
+          return;
+        }
+      }
+
+      if (e.key === 'Escape') {
+        clearSelection();
+        return;
+      }
+
       const active = document.activeElement;
-      const tag = active ? active.tagName.toLowerCase() : '';
+      const tag = active && active.tagName ? active.tagName.toLowerCase() : '';
       if (tag === 'input' || tag === 'textarea' || tag === 'select') {
         return;
       }
+
+      if (e.key === 'Enter' || e.key === 'F2') {
+        const bounds = getSelectionBounds();
+        if (bounds && bounds.minRow === bounds.maxRow && bounds.minCol === bounds.maxCol) {
+          const displayFields = getDisplayFields();
+          const f = displayFields[bounds.minCol];
+          const row = allRows[bounds.minRow];
+          const rowKey = row ? rowKeyOf(row) : null;
+          if (f && row && rowKey) {
+            e.preventDefault();
+            let val = row[f.name];
+            if (val === undefined) {
+              const match = Object.keys(row).find(k => k.toLowerCase() === f.name.toLowerCase());
+              if (match) val = row[match];
+            }
+            const stageKey = JSON.stringify(rowKey) + '::' + f.name;
+            const isStaged = stagedChanges[stageKey] !== undefined;
+            const displayVal = isStaged ? stagedChanges[stageKey].newVal : val;
+            const valStr = displayVal === null || displayVal === undefined ? 'null' : (typeof displayVal === 'object' ? JSON.stringify(displayVal) : String(displayVal));
+            editCell(f.name, rowKey, valStr);
+            return;
+          }
+        }
+      }
+
       const maxPages = Math.max(1, Math.ceil(totalCount / pageSize));
       if (e.key === 'Home') {
         e.preventDefault();
@@ -2413,6 +2792,19 @@ export class TableWebviewProvider {
           goToPage(currentPage + 1, 'next');
         }
       }
+    });
+
+    document.addEventListener('mousedown', (e) => {
+      const isCell = e.target && typeof e.target.closest === 'function' && e.target.closest('td[data-row]');
+      const isToolbar = e.target && typeof e.target.closest === 'function' && e.target.closest('.toolbar');
+      const isModal = e.target && typeof e.target.closest === 'function' && (e.target.closest('#modalOverlay') || e.target.closest('#fkPopover'));
+      if (!isCell && !isToolbar && !isModal) {
+        clearSelection();
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      isSelecting = false;
     });
 
     // Automatically trigger initial load when webview is ready

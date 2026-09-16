@@ -1,7 +1,7 @@
 import fs from 'fs';
 import { BaseDriver, ForeignKeyInfo } from './BaseDriver.js';
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
-import { ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
+import { BoundStatement, ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
 import { buildPagedQuery, finishPage, renumber } from '../sql/PagedQuery.js';
 
 export class SqliteDriver extends BaseDriver {
@@ -193,6 +193,28 @@ export class SqliteDriver extends BaseDriver {
 
     const result = this.db.run(sql, bound);
     return { rows: [], fields: [], affectedRows: result?.changes || 0, costTimeMs: Date.now() - startTime };
+  }
+
+  public override async executeTransaction(statements: BoundStatement[]): Promise<void> {
+    if (statements.length === 0) return;
+    await this.connect();
+    this.db.run('BEGIN TRANSACTION;');
+    try {
+      for (const stmt of statements) {
+        const bound = (stmt.params || []).map((p) => (p === undefined ? null : p));
+        if (bound.length > 0) {
+          this.db.run(stmt.sql, bound);
+        } else {
+          this.db.run(stmt.sql);
+        }
+      }
+      this.db.run('COMMIT;');
+    } catch (err) {
+      try {
+        this.db.run('ROLLBACK;');
+      } catch {}
+      throw err;
+    }
   }
 
   async getTableData(tableName: string, params: PageParams, schemaName?: string): Promise<QueryResult> {

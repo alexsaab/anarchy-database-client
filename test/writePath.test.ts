@@ -87,3 +87,35 @@ test('deleting by composite key removes only that row', async () => {
     assert.deepEqual((await d.executeQuery('SELECT id FROM t ORDER BY id')).rows.map((r: any) => r.id), [1, 3]);
   });
 });
+
+test('executeTransaction commits all statements on success', async () => {
+  await withDb(async (d, ref) => {
+    const statements = [
+      new RowWriter(d, 'SQLite', ref).update('name', 'alpha', { id: 1 }),
+      new RowWriter(d, 'SQLite', ref).update('name', 'beta', { id: 2 }),
+      new RowWriter(d, 'SQLite', ref).update('name', 'gamma', { id: 3 }),
+    ];
+    await d.executeTransaction(statements);
+
+    const rows = (await d.executeQuery('SELECT id, name FROM t ORDER BY id')).rows;
+    assert.deepEqual(rows.map((r: any) => r.name), ['alpha', 'beta', 'gamma']);
+  });
+});
+
+test('executeTransaction rolls back all statements if one fails', async () => {
+  await withDb(async (d, ref) => {
+    const statements = [
+      new RowWriter(d, 'SQLite', ref).update('name', 'changed_1', { id: 1 }),
+      { sql: 'INVALID SQL STATEMENT SYNTAX ERROR;', params: [] },
+      new RowWriter(d, 'SQLite', ref).update('name', 'changed_3', { id: 3 }),
+    ];
+
+    await assert.rejects(async () => {
+      await d.executeTransaction(statements);
+    });
+
+    const rows = (await d.executeQuery('SELECT id, name FROM t ORDER BY id')).rows;
+    // Row 1 should NOT be 'changed_1' because the transaction was rolled back
+    assert.deepEqual(rows.map((r: any) => r.name), ['a', 'a', 'b']);
+  });
+});

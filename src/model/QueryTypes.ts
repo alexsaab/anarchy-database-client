@@ -7,6 +7,11 @@ export interface ColumnInfo {
   comment?: string;
 }
 
+export interface BoundStatement {
+  sql: string;
+  params: any[];
+}
+
 export interface TableInfo {
   name: string;
   schema?: string;
