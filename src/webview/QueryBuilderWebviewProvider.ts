@@ -32,11 +32,64 @@ export class QueryBuilderWebviewProvider {
         databases = await driver.getDatabases();
       } catch {}
 
-      let currentDb = initialDatabase || connectionConfig.database || (databases.length > 0 ? databases[0] : '');
+      let activeDriver = driver;
+
+      // Determine initial database
+      let currentDb = initialDatabase;
+      if (!currentDb && connectionConfig.database && connectionConfig.database !== 'postgres') {
+        currentDb = connectionConfig.database;
+      }
+      // If still not determined, see if any database name matches connection name (e.g. "Postgres Hermes" -> "hermes")
+      if (!currentDb && databases.length > 0) {
+        const matchingDb = databases.find(
+          (d) => d.toLowerCase() !== 'postgres' && connectionConfig.name.toLowerCase().includes(d.toLowerCase())
+        );
+        if (matchingDb) {
+          currentDb = matchingDb;
+        }
+      }
+      if (!currentDb) {
+        currentDb = connectionConfig.database || (databases.length > 0 ? databases[0] : '');
+      }
+
+      // If currentDb differs from connectionConfig.database, switch activeDriver to that database
+      if (currentDb && currentDb !== connectionConfig.database) {
+        try {
+          activeDriver = await DriverManager.getInstance().getDriver(
+            { ...connectionConfig, database: currentDb },
+            password,
+            sshPassword
+          );
+        } catch {}
+      }
+
+      // If currentDb is 'postgres' and there are other non-system databases:
+      // check if 'postgres' has any tables. If not, pick the first database that has tables!
+      if (currentDb === 'postgres' && databases.length > 1) {
+        const defaultTables = await activeDriver.getTables(currentDb).catch(() => []);
+        if (defaultTables.length === 0) {
+          for (const db of databases) {
+            if (db === 'postgres' || db === 'template0' || db === 'template1') continue;
+            try {
+              const testDriver = await DriverManager.getInstance().getDriver(
+                { ...connectionConfig, database: db },
+                password,
+                sshPassword
+              );
+              const tList = await testDriver.getTables(db).catch(() => []);
+              if (tList.length > 0) {
+                currentDb = db;
+                activeDriver = testDriver;
+                break;
+              }
+            } catch {}
+          }
+        }
+      }
 
       let schemas: string[] = [];
       try {
-        schemas = (await driver.getSchemas(currentDb)).filter(
+        schemas = (await activeDriver.getSchemas(currentDb)).filter(
           (s) => !['information_schema', 'pg_catalog', 'pg_toast'].includes(s)
         );
       } catch {}
@@ -45,13 +98,13 @@ export class QueryBuilderWebviewProvider {
       let tables: TableInfo[] = [];
 
       if (currentSchema && currentSchema !== '__all__') {
-        tables = await driver.getTables(currentDb, currentSchema).catch(() => []);
+        tables = await activeDriver.getTables(currentDb, currentSchema).catch(() => []);
       } else if (currentSchema === '__all__') {
-        tables = await driver.getTables(currentDb).catch(() => []);
+        tables = await activeDriver.getTables(currentDb).catch(() => []);
       } else {
         // Automatically find which schema has tables
         if (schemas.includes('public')) {
-          tables = await driver.getTables(currentDb, 'public').catch(() => []);
+          tables = await activeDriver.getTables(currentDb, 'public').catch(() => []);
           if (tables.length > 0) {
             currentSchema = 'public';
           }
@@ -59,7 +112,7 @@ export class QueryBuilderWebviewProvider {
         if (tables.length === 0 && schemas.length > 0) {
           for (const s of schemas) {
             if (s === 'public') continue;
-            const sTables = await driver.getTables(currentDb, s).catch(() => []);
+            const sTables = await activeDriver.getTables(currentDb, s).catch(() => []);
             if (sTables.length > 0) {
               currentSchema = s;
               tables = sTables;
@@ -68,7 +121,7 @@ export class QueryBuilderWebviewProvider {
           }
         }
         if (tables.length === 0) {
-          tables = await driver.getTables(currentDb).catch(() => []);
+          tables = await activeDriver.getTables(currentDb).catch(() => []);
           if (tables.length > 0 && tables[0].schema) {
             currentSchema = tables[0].schema;
           } else {
@@ -82,7 +135,7 @@ export class QueryBuilderWebviewProvider {
       await Promise.all(
         tables.slice(0, 100).map(async (tbl) => {
           try {
-            const cols = await driver.getColumns(tbl.name, currentDb, tbl.schema);
+            const cols = await activeDriver.getColumns(tbl.name, currentDb, tbl.schema);
             tableSchemaList.push({ name: tbl.name, schema: tbl.schema, columns: cols });
           } catch {
             tableSchemaList.push({ name: tbl.name, schema: tbl.schema, columns: [] });
@@ -96,17 +149,22 @@ export class QueryBuilderWebviewProvider {
           case 'changeDatabase': {
             try {
               currentDb = msg.database;
+              activeDriver = await DriverManager.getInstance().getDriver(
+                { ...connectionConfig, database: currentDb },
+                password,
+                sshPassword
+              );
               let newSchemas: string[] = [];
               try {
-                newSchemas = (await driver.getSchemas(currentDb)).filter(
+                newSchemas = (await activeDriver.getSchemas(currentDb)).filter(
                   (s) => !['information_schema', 'pg_catalog', 'pg_toast'].includes(s)
                 );
               } catch {}
               let targetSchema = newSchemas.includes('public') ? 'public' : newSchemas[0] || 'public';
-              let newTables = await driver.getTables(currentDb, targetSchema).catch(() => []);
+              let newTables = await activeDriver.getTables(currentDb, targetSchema).catch(() => []);
               if (newTables.length === 0 && newSchemas.length > 0) {
                 for (const s of newSchemas) {
-                  const sTables = await driver.getTables(currentDb, s).catch(() => []);
+                  const sTables = await activeDriver.getTables(currentDb, s).catch(() => []);
                   if (sTables.length > 0) {
                     targetSchema = s;
                     newTables = sTables;
@@ -114,11 +172,17 @@ export class QueryBuilderWebviewProvider {
                   }
                 }
               }
+              if (newTables.length === 0) {
+                newTables = await activeDriver.getTables(currentDb).catch(() => []);
+                if (newTables.length > 0 && newTables[0].schema) {
+                  targetSchema = newTables[0].schema;
+                }
+              }
               const schemaList: { name: string; schema?: string; columns: ColumnInfo[] }[] = [];
               await Promise.all(
                 newTables.slice(0, 100).map(async (tbl) => {
                   try {
-                    const cols = await driver.getColumns(tbl.name, currentDb, tbl.schema);
+                    const cols = await activeDriver.getColumns(tbl.name, currentDb, tbl.schema);
                     schemaList.push({ name: tbl.name, schema: tbl.schema, columns: cols });
                   } catch {
                     schemaList.push({ name: tbl.name, schema: tbl.schema, columns: [] });
@@ -142,12 +206,12 @@ export class QueryBuilderWebviewProvider {
             try {
               currentSchema = msg.schema;
               const schemaFilter = currentSchema === '__all__' ? undefined : currentSchema;
-              const newTables = await driver.getTables(currentDb, schemaFilter).catch(() => []);
+              const newTables = await activeDriver.getTables(currentDb, schemaFilter).catch(() => []);
               const schemaList: { name: string; schema?: string; columns: ColumnInfo[] }[] = [];
               await Promise.all(
                 newTables.slice(0, 100).map(async (tbl) => {
                   try {
-                    const cols = await driver.getColumns(tbl.name, currentDb, tbl.schema);
+                    const cols = await activeDriver.getColumns(tbl.name, currentDb, tbl.schema);
                     schemaList.push({ name: tbl.name, schema: tbl.schema, columns: cols });
                   } catch {
                     schemaList.push({ name: tbl.name, schema: tbl.schema, columns: [] });
@@ -167,7 +231,7 @@ export class QueryBuilderWebviewProvider {
           }
           case 'loadColumns': {
             try {
-              const cols = await driver.getColumns(msg.tableName, currentDb, msg.schema);
+              const cols = await activeDriver.getColumns(msg.tableName, currentDb, msg.schema);
               panel.webview.postMessage({
                 type: 'columnsLoaded',
                 tableName: msg.tableName,
@@ -184,7 +248,7 @@ export class QueryBuilderWebviewProvider {
           }
           case 'runQuery': {
             try {
-              const res = await driver.executeQuery(msg.sql);
+              const res = await activeDriver.executeQuery(msg.sql);
               panel.webview.postMessage({ type: 'queryResult', result: res });
             } catch (err: any) {
               panel.webview.postMessage({ type: 'error', message: err.message });
