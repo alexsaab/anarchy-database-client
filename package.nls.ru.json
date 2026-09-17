@@ -42,5 +42,12 @@
   "configuration.title": "Anarchy Database Client",
   "configuration.promptForQueryParameters": "Запрашивать значения подстановок :name, $1 и ? перед выполнением запроса. Отключите, если используете JSONB-операторы ? в PostgreSQL.",
   "command.setAiApiKey": "Задать API-ключ ИИ-провайдера...",
-  "command.vectorSearch": "Поиск по векторному сходству..."
+  "command.vectorSearch": "Поиск по векторному сходству...",
+  "command.copyName": "Копировать имя",
+  "command.copyTableDdl": "Копировать скрипт CREATE TABLE",
+  "command.showTableDdl": "Открыть скрипт CREATE TABLE",
+  "command.copySchemaDdl": "Копировать скрипты CREATE TABLE",
+  "command.showSchemaDdl": "Открыть скрипты CREATE TABLE",
+  "command.copyDatabaseDdl": "Копировать скрипты CREATE TABLE (БД)",
+  "command.copyScriptDdl": "Копировать DDL-скрипт"
 }

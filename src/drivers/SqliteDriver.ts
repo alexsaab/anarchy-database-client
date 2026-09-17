@@ -129,6 +129,26 @@ export class SqliteDriver extends BaseDriver {
     }
   }
 
+  override async getTableDdl(tableName: string): Promise<string> {
+    try {
+      const escaped = tableName.replace(/'/g, "''");
+      const res = await this.executeQuery(`SELECT sql FROM sqlite_master WHERE type IN ('table', 'view') AND name = '${escaped}';`);
+      const sql = res.rows[0]?.sql;
+      if (typeof sql === 'string' && sql.trim()) {
+        const trimmed = sql.trim();
+        return trimmed.endsWith(';') ? trimmed : `${trimmed};`;
+      }
+    } catch (e) {}
+    return super.getTableDdl(tableName);
+  }
+
+  override async getScript(name: string, type: 'table' | 'view' | 'function' | 'procedure' | 'trigger'): Promise<string> {
+    if (type === 'table' || type === 'view') {
+      return this.getTableDdl(name);
+    }
+    return `-- DDL for ${type} ${name}`;
+  }
+
   async executeQuery(sql: string): Promise<QueryResult> {
     await this.connect();
     const startTime = Date.now();

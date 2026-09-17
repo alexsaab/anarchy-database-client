@@ -253,7 +253,29 @@ export class MysqlDriver extends BaseDriver {
     }));
   }
 
-  async getScript(name: string, type: 'view' | 'function' | 'procedure' | 'trigger', databaseName?: string): Promise<string> {
+  override async getTableDdl(tableName: string, databaseName?: string): Promise<string> {
+    const targetDb = databaseName || this.config.database;
+    if (targetDb) {
+      try {
+        await this.queryWithRetry(`USE \`${targetDb}\`;`);
+      } catch (e) {}
+    }
+    try {
+      const [res] = await this.queryWithRetry(`SHOW CREATE TABLE \`${tableName}\`;`);
+      const row = (res as any[])[0];
+      const ddl = row?.['Create Table'] || row?.['create table'] || Object.values(row || {})[1];
+      if (typeof ddl === 'string' && ddl.trim()) {
+        const trimmed = ddl.trim();
+        return trimmed.endsWith(';') ? trimmed : `${trimmed};`;
+      }
+    } catch (e) {}
+    return super.getTableDdl(tableName, databaseName);
+  }
+
+  override async getScript(name: string, type: 'table' | 'view' | 'function' | 'procedure' | 'trigger', databaseName?: string): Promise<string> {
+    if (type === 'table') {
+      return this.getTableDdl(name, databaseName);
+    }
     const targetDb = databaseName || this.config.database;
 
     if (targetDb) {

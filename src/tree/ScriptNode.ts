@@ -5,7 +5,7 @@ import { DriverManager } from '../drivers/DriverManager.js';
 
 export class ScriptNode extends BaseNode {
   public objectName: string;
-  public objectType: 'view' | 'function' | 'procedure' | 'trigger';
+  public objectType: 'table' | 'view' | 'function' | 'procedure' | 'trigger';
   public connectionConfig: ConnectionConfig;
   public password?: string;
   public sshPassword?: string;
@@ -13,7 +13,7 @@ export class ScriptNode extends BaseNode {
 
   constructor(
     objectName: string,
-    objectType: 'view' | 'function' | 'procedure' | 'trigger',
+    objectType: 'table' | 'view' | 'function' | 'procedure' | 'trigger',
     connectionConfig: ConnectionConfig,
     password?: string,
     sshPassword?: string,

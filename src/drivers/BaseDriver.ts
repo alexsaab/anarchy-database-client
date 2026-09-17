@@ -1,5 +1,6 @@
 import { ConnectionConfig } from '../model/ConnectionConfig.js';
 import { BoundStatement, ColumnInfo, PageParams, QueryResult, TableInfo } from '../model/QueryTypes.js';
+import { quoteId, formatTableRef } from '../sql/RowWriter.js';
 import { ConnectionState } from './ConnectionState.js';
 
 export interface ForeignKeyInfo {
@@ -130,7 +131,52 @@ export abstract class BaseDriver {
     return [];
   }
 
-  async getScript(name: string, type: 'view' | 'function' | 'procedure' | 'trigger', databaseName?: string, schemaName?: string): Promise<string> {
+  async getTableDdl(tableName: string, databaseName?: string, schemaName?: string): Promise<string> {
+    const columns = await this.getColumns(tableName, databaseName, schemaName);
+    if (!columns || columns.length === 0) {
+      return `-- Unable to retrieve columns for table ${tableName}`;
+    }
+    const dbType = this.config.type;
+    const tableRef = formatTableRef(dbType, tableName, schemaName, databaseName);
+    const colLines = columns.map((col) => {
+      let line = `  ${quoteId(dbType, col.name)} ${col.type}`;
+      if (col.nullable === false) {
+        line += ' NOT NULL';
+      }
+      if (col.defaultValue !== undefined && col.defaultValue !== null && col.defaultValue !== '') {
+        line += ` DEFAULT ${col.defaultValue}`;
+      }
+      return line;
+    });
+
+    const pks = columns.filter((c) => c.isPrimaryKey).map((c) => quoteId(dbType, c.name));
+    if (pks.length > 0) {
+      colLines.push(`  PRIMARY KEY (${pks.join(', ')})`);
+    }
+
+    try {
+      const fks = await this.getForeignKeys(tableName, databaseName, schemaName);
+      if (fks && fks.length > 0) {
+        for (const fk of fks) {
+          if (fk.columnName && fk.referencedTable && fk.referencedColumn) {
+            const fkName = fk.constraintName ? `CONSTRAINT ${quoteId(dbType, fk.constraintName)} ` : '';
+            colLines.push(
+              `  ${fkName}FOREIGN KEY (${quoteId(dbType, fk.columnName)}) REFERENCES ${quoteId(dbType, fk.referencedTable)} (${quoteId(dbType, fk.referencedColumn)})`
+            );
+          }
+        }
+      }
+    } catch {
+      // Ignore if foreign key inspection is not supported
+    }
+
+    return `CREATE TABLE ${tableRef} (\n${colLines.join(',\n')}\n);`;
+  }
+
+  async getScript(name: string, type: 'table' | 'view' | 'function' | 'procedure' | 'trigger', databaseName?: string, schemaName?: string): Promise<string> {
+    if (type === 'table') {
+      return this.getTableDdl(name, databaseName, schemaName);
+    }
     return `-- DDL for ${type} ${name}\n-- Not implemented for this driver`;
   }
 

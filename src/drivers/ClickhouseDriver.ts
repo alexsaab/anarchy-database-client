@@ -109,6 +109,25 @@ export class ClickhouseDriver extends BaseDriver {
     return [];
   }
 
+  override async getTableDdl(tableName: string, databaseName?: string): Promise<string> {
+    const db = databaseName || this.config.database || 'default';
+    try {
+      const res = await this.httpQuery(`SHOW CREATE TABLE \`${db}\`.\`${tableName}\` FORMAT TabSeparatedRaw;`);
+      if (typeof res === 'string' && res.trim()) {
+        const trimmed = res.trim();
+        return trimmed.endsWith(';') ? trimmed : `${trimmed};`;
+      }
+    } catch (e) {}
+    return super.getTableDdl(tableName, databaseName);
+  }
+
+  override async getScript(name: string, type: 'table' | 'view' | 'function' | 'procedure' | 'trigger', databaseName?: string): Promise<string> {
+    if (type === 'table' || type === 'view') {
+      return this.getTableDdl(name, databaseName);
+    }
+    return `-- DDL for ${type} ${name}`;
+  }
+
   async getColumns(tableName: string, databaseName?: string): Promise<ColumnInfo[]> {
     const db = databaseName || this.config.database || 'default';
     const res = await this.httpQuery(`DESCRIBE TABLE \`${db}\`.\`${tableName}\` FORMAT JSON;`);

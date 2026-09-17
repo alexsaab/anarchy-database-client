@@ -6,6 +6,7 @@ import { DatabaseTreeProvider } from './tree/DatabaseTreeProvider.js';
 import { ConnectionNode } from './tree/ConnectionNode.js';
 import { DatabaseNode } from './tree/DatabaseNode.js';
 import { TableNode } from './tree/TableNode.js';
+import { ColumnNode } from './tree/ColumnNode.js';
 import { TableGroupNode } from './tree/TableGroupNode.js';
 import { ViewGroupNode } from './tree/ViewGroupNode.js';
 import { FunctionGroupNode } from './tree/FunctionGroupNode.js';
@@ -370,6 +371,233 @@ export function activate(context: vscode.ExtensionContext) {
             t(`Failed to open DDL script: ${e.message}`, `Не удалось открыть DDL-скрипт: ${e.message}`)
           );
         }
+      }
+    })
+  );
+
+  // Copy Name command (Table, Schema, Database, Column, Routine, Connection)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.copyName', async (node?: any) => {
+      if (!node) return;
+      let name: string | undefined;
+      let label = t('name', 'имя');
+      if (node instanceof TableNode && node.table) {
+        name = node.table.name;
+        label = t('table name', 'имя таблицы');
+      } else if (node instanceof SchemaNode) {
+        name = node.schemaName;
+        label = t('schema name', 'имя схемы');
+      } else if (node instanceof DatabaseNode) {
+        name = node.dbName;
+        label = t('database name', 'имя базы данных');
+      } else if (node instanceof ColumnNode && node.column) {
+        name = node.column.name;
+        label = t('column name', 'имя колонки');
+      } else if (node instanceof ScriptNode) {
+        name = node.objectName;
+        label = t(`${node.objectType} name`, `имя ${node.objectType}`);
+      } else if (node instanceof ConnectionNode && node.config) {
+        name = node.config.name;
+        label = t('connection name', 'имя подключения');
+      } else if (typeof node.label === 'string') {
+        name = node.label;
+      } else if (typeof node.name === 'string') {
+        name = node.name;
+      }
+
+      if (name) {
+        await vscode.env.clipboard.writeText(name);
+        vscode.window.showInformationMessage(
+          t(`Copied ${label} "${name}" to clipboard`, `${label.charAt(0).toUpperCase() + label.slice(1)} "${name}" скопировано в буфер обмена`)
+        );
+      }
+    }),
+    vscode.commands.registerCommand('dbClient.copyTableName', (node?: any) => vscode.commands.executeCommand('dbClient.copyName', node)),
+    vscode.commands.registerCommand('dbClient.copyColumnName', (node?: any) => vscode.commands.executeCommand('dbClient.copyName', node))
+  );
+
+  // Copy / Show Table DDL (CREATE TABLE)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.copyTableDdl', async (node?: TableNode) => {
+      if (!node || !(node instanceof TableNode) || !node.table) return;
+      try {
+        const driver = await DriverManager.getInstance().getDriver(node.connectionConfig, node.password, node.sshPassword);
+        const ddl = await driver.getTableDdl(node.table.name, node.connectionConfig.database, node.table.schema);
+        await vscode.env.clipboard.writeText(ddl);
+        vscode.window.showInformationMessage(
+          t(`Copied CREATE TABLE script for "${node.table.name}" to clipboard`, `Скрипт CREATE TABLE для "${node.table.name}" скопирован в буфер обмена`)
+        );
+      } catch (e: any) {
+        vscode.window.showErrorMessage(
+          t(`Failed to generate CREATE TABLE script: ${e.message}`, `Не удалось сгенерировать скрипт CREATE TABLE: ${e.message}`)
+        );
+      }
+    }),
+    vscode.commands.registerCommand('dbClient.showTableDdl', async (node?: TableNode) => {
+      if (!node || !(node instanceof TableNode) || !node.table) return;
+      try {
+        const driver = await DriverManager.getInstance().getDriver(node.connectionConfig, node.password, node.sshPassword);
+        const ddl = await driver.getTableDdl(node.table.name, node.connectionConfig.database, node.table.schema);
+        const doc = await vscode.workspace.openTextDocument({ language: 'sql', content: ddl });
+        await vscode.window.showTextDocument(doc);
+      } catch (e: any) {
+        vscode.window.showErrorMessage(
+          t(`Failed to generate CREATE TABLE script: ${e.message}`, `Не удалось сгенерировать скрипт CREATE TABLE: ${e.message}`)
+        );
+      }
+    })
+  );
+
+  // Copy / Show Schema DDL (all tables in Schema or TableGroup)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.copySchemaDdl', async (node?: SchemaNode | TableGroupNode) => {
+      if (!node) return;
+      const schemaName = (node instanceof SchemaNode) ? node.schemaName : (node instanceof TableGroupNode ? node.schemaName : undefined);
+      const config = node.connectionConfig;
+      const password = node.password;
+      const sshPassword = node.sshPassword;
+
+      try {
+        await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: t(`Generating CREATE TABLE scripts for schema "${schemaName || 'public'}"...`, `Генерация скриптов CREATE TABLE для схемы "${schemaName || 'public'}"...`),
+            cancellable: false,
+          },
+          async () => {
+            const driver = await DriverManager.getInstance().getDriver(config, password, sshPassword);
+            const tables = await driver.getTables(config.database, schemaName);
+            if (!tables || tables.length === 0) {
+              vscode.window.showInformationMessage(
+                t(`No tables found in schema "${schemaName || 'public'}"`, `В схеме "${schemaName || 'public'}" таблицы не найдены`)
+              );
+              return;
+            }
+            const scripts: string[] = [];
+            for (const tbl of tables) {
+              const ddl = await driver.getTableDdl(tbl.name, config.database, tbl.schema || schemaName);
+              scripts.push(ddl);
+            }
+            const fullSql = `-- Schema: ${schemaName || 'public'}\n-- Tables count: ${tables.length}\n-- Date: ${new Date().toISOString()}\n\n` + scripts.join('\n\n');
+            await vscode.env.clipboard.writeText(fullSql);
+            vscode.window.showInformationMessage(
+              t(
+                `Copied CREATE TABLE scripts for ${tables.length} table(s) in "${schemaName || 'public'}" to clipboard`,
+                `Скрипты CREATE TABLE для ${tables.length} табл. в "${schemaName || 'public'}" скопированы в буфер обмена`
+              )
+            );
+          }
+        );
+      } catch (e: any) {
+        vscode.window.showErrorMessage(
+          t(`Failed to generate schema CREATE TABLE scripts: ${e.message}`, `Не удалось сгенерировать скрипты CREATE TABLE: ${e.message}`)
+        );
+      }
+    }),
+    vscode.commands.registerCommand('dbClient.showSchemaDdl', async (node?: SchemaNode | TableGroupNode) => {
+      if (!node) return;
+      const schemaName = (node instanceof SchemaNode) ? node.schemaName : (node instanceof TableGroupNode ? node.schemaName : undefined);
+      const config = node.connectionConfig;
+      const password = node.password;
+      const sshPassword = node.sshPassword;
+
+      try {
+        await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: t(`Generating CREATE TABLE scripts for schema "${schemaName || 'public'}"...`, `Генерация скриптов CREATE TABLE для схемы "${schemaName || 'public'}"...`),
+            cancellable: false,
+          },
+          async () => {
+            const driver = await DriverManager.getInstance().getDriver(config, password, sshPassword);
+            const tables = await driver.getTables(config.database, schemaName);
+            if (!tables || tables.length === 0) {
+              vscode.window.showInformationMessage(
+                t(`No tables found in schema "${schemaName || 'public'}"`, `В схеме "${schemaName || 'public'}" таблицы не найдены`)
+              );
+              return;
+            }
+            const scripts: string[] = [];
+            for (const tbl of tables) {
+              const ddl = await driver.getTableDdl(tbl.name, config.database, tbl.schema || schemaName);
+              scripts.push(ddl);
+            }
+            const fullSql = `-- Schema: ${schemaName || 'public'}\n-- Tables count: ${tables.length}\n-- Date: ${new Date().toISOString()}\n\n` + scripts.join('\n\n');
+            const doc = await vscode.workspace.openTextDocument({ language: 'sql', content: fullSql });
+            await vscode.window.showTextDocument(doc);
+          }
+        );
+      } catch (e: any) {
+        vscode.window.showErrorMessage(
+          t(`Failed to generate schema CREATE TABLE scripts: ${e.message}`, `Не удалось сгенерировать скрипты CREATE TABLE: ${e.message}`)
+        );
+      }
+    })
+  );
+
+  // Copy Database DDL (all tables in Database)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.copyDatabaseDdl', async (node?: DatabaseNode) => {
+      if (!node || !(node instanceof DatabaseNode)) return;
+      const dbName = node.dbName;
+      const config = node.connectionConfig;
+      const password = node.password;
+      const sshPassword = node.sshPassword;
+
+      try {
+        await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: t(`Generating CREATE TABLE scripts for database "${dbName}"...`, `Генерация скриптов CREATE TABLE для базы данных "${dbName}"...`),
+            cancellable: false,
+          },
+          async () => {
+            const driver = await DriverManager.getInstance().getDriver(config, password, sshPassword);
+            const tables = await driver.getTables(dbName);
+            if (!tables || tables.length === 0) {
+              vscode.window.showInformationMessage(
+                t(`No tables found in database "${dbName}"`, `В базе данных "${dbName}" таблицы не найдены`)
+              );
+              return;
+            }
+            const scripts: string[] = [];
+            for (const tbl of tables) {
+              const ddl = await driver.getTableDdl(tbl.name, dbName, tbl.schema);
+              scripts.push(ddl);
+            }
+            const fullSql = `-- Database: ${dbName}\n-- Tables count: ${tables.length}\n-- Date: ${new Date().toISOString()}\n\n` + scripts.join('\n\n');
+            await vscode.env.clipboard.writeText(fullSql);
+            vscode.window.showInformationMessage(
+              t(
+                `Copied CREATE TABLE scripts for ${tables.length} table(s) in "${dbName}" to clipboard`,
+                `Скрипты CREATE TABLE для ${tables.length} табл. в "${dbName}" скопированы в буфер обмена`
+              )
+            );
+          }
+        );
+      } catch (e: any) {
+        vscode.window.showErrorMessage(
+          t(`Failed to generate database CREATE TABLE scripts: ${e.message}`, `Не удалось сгенерировать скрипты CREATE TABLE: ${e.message}`)
+        );
+      }
+    })
+  );
+
+  // Copy Script Node DDL (views, procedures, functions, triggers)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dbClient.copyScriptDdl', async (node?: ScriptNode) => {
+      if (!node || !(node instanceof ScriptNode)) return;
+      try {
+        const driver = await DriverManager.getInstance().getDriver(node.connectionConfig, node.password, node.sshPassword);
+        const scriptSql = await driver.getScript(node.objectName, node.objectType, node.connectionConfig.database, node.schemaName);
+        await vscode.env.clipboard.writeText(scriptSql);
+        vscode.window.showInformationMessage(
+          t(`Copied DDL script for "${node.objectName}" to clipboard`, `DDL-скрипт для "${node.objectName}" скопирован в буфер обмена`)
+        );
+      } catch (e: any) {
+        vscode.window.showErrorMessage(
+          t(`Failed to fetch DDL script: ${e.message}`, `Не удалось получить DDL-скрипт: ${e.message}`)
+        );
       }
     })
   );

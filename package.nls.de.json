@@ -40,5 +40,12 @@
   "configuration.title": "Anarchy Database Client",
   "configuration.promptForQueryParameters": "Vor der Ausführung nach Werten für die Platzhalter :name, $1 und ? fragen. Deaktivieren Sie dies, wenn Sie PostgreSQL-JSONB-Operatoren ? verwenden.",
   "command.setAiApiKey": "API-Schlüssel des KI-Anbieters festlegen...",
-  "command.vectorSearch": "Vektor-Ähnlichkeitssuche..."
+  "command.vectorSearch": "Vektor-Ähnlichkeitssuche...",
+  "command.copyName": "Name kopieren",
+  "command.copyTableDdl": "CREATE TABLE-Skript kopieren",
+  "command.showTableDdl": "CREATE TABLE-Skript öffnen",
+  "command.copySchemaDdl": "CREATE TABLE-Skripte kopieren",
+  "command.showSchemaDdl": "CREATE TABLE-Skripte öffnen",
+  "command.copyDatabaseDdl": "CREATE TABLE-Skripte kopieren (Datenbank)",
+  "command.copyScriptDdl": "DDL-Skript kopieren"
 }

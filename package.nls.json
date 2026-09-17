@@ -42,5 +42,12 @@
   "configuration.title": "Anarchy Database Client",
   "configuration.promptForQueryParameters": "Prompt for values of :named, $1 and ? placeholders before running a query. Disable if you use PostgreSQL JSONB ? operators.",
   "command.setAiApiKey": "Set AI Provider API Key...",
-  "command.vectorSearch": "Vector Similarity Search..."
+  "command.vectorSearch": "Vector Similarity Search...",
+  "command.copyName": "Copy Name",
+  "command.copyTableDdl": "Copy CREATE TABLE Script",
+  "command.showTableDdl": "Open CREATE TABLE Script",
+  "command.copySchemaDdl": "Copy CREATE TABLE Scripts",
+  "command.showSchemaDdl": "Open CREATE TABLE Scripts",
+  "command.copyDatabaseDdl": "Copy CREATE TABLE Scripts (Database)",
+  "command.copyScriptDdl": "Copy DDL Script"
 }

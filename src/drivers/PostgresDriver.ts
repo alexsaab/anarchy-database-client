@@ -218,7 +218,10 @@ export class PostgresDriver extends BaseDriver {
     }));
   }
 
-  async getScript(name: string, type: 'view' | 'function' | 'procedure' | 'trigger', databaseName?: string, schemaName: string = 'public'): Promise<string> {
+  override async getScript(name: string, type: 'table' | 'view' | 'function' | 'procedure' | 'trigger', databaseName?: string, schemaName: string = 'public'): Promise<string> {
+    if (type === 'table') {
+      return this.getTableDdl(name, databaseName, schemaName);
+    }
     try {
       if (type === 'view') {
         const res = await this.executeQuery(`SELECT pg_get_viewdef('"${schemaName}"."${name}"', true) as def;`);

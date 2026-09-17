@@ -40,5 +40,12 @@
   "configuration.title": "Anarchy Database Client",
   "configuration.promptForQueryParameters": "执行查询前提示输入 :name、$1 和 ? 占位符的值。如果使用 PostgreSQL JSONB 的 ? 运算符，请禁用此项。",
   "command.setAiApiKey": "设置 AI 提供商 API 密钥...",
-  "command.vectorSearch": "向量相似度搜索..."
+  "command.vectorSearch": "向量相似度搜索...",
+  "command.copyName": "复制名称",
+  "command.copyTableDdl": "复制 CREATE TABLE 脚本",
+  "command.showTableDdl": "打开 CREATE TABLE 脚本",
+  "command.copySchemaDdl": "复制 CREATE TABLE 脚本",
+  "command.showSchemaDdl": "打开 CREATE TABLE 脚本",
+  "command.copyDatabaseDdl": "复制 CREATE TABLE 脚本 (数据库)",
+  "command.copyScriptDdl": "复制 DDL 脚本"
 }

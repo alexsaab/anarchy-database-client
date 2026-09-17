@@ -247,6 +247,41 @@
         "command": "dbClient.vectorSearch",
         "title": "%command.vectorSearch%",
         "icon": "$(symbol-array)"
+      },
+      {
+        "command": "dbClient.copyName",
+        "title": "%command.copyName%",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "dbClient.copyTableDdl",
+        "title": "%command.copyTableDdl%",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "dbClient.showTableDdl",
+        "title": "%command.showTableDdl%",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "dbClient.copySchemaDdl",
+        "title": "%command.copySchemaDdl%",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "dbClient.showSchemaDdl",
+        "title": "%command.showSchemaDdl%",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "dbClient.copyDatabaseDdl",
+        "title": "%command.copyDatabaseDdl%",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "dbClient.copyScriptDdl",
+        "title": "%command.copyScriptDdl%",
+        "icon": "$(copy)"
       }
     ],
     "menus": {
@@ -268,6 +303,41 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "dbClient.copyName",
+          "when": "view == database-client-explorer && (viewItem == tableNode || viewItem == schemaNode || viewItem == databaseNode || viewItem == columnNode || viewItem == scriptNode || viewItem == connectionNode)",
+          "group": "0_copy@1"
+        },
+        {
+          "command": "dbClient.copyTableDdl",
+          "when": "view == database-client-explorer && viewItem == tableNode",
+          "group": "0_copy@2"
+        },
+        {
+          "command": "dbClient.showTableDdl",
+          "when": "view == database-client-explorer && viewItem == tableNode",
+          "group": "0_copy@3"
+        },
+        {
+          "command": "dbClient.copySchemaDdl",
+          "when": "view == database-client-explorer && (viewItem == schemaNode || viewItem == tableGroupNode)",
+          "group": "0_copy@2"
+        },
+        {
+          "command": "dbClient.showSchemaDdl",
+          "when": "view == database-client-explorer && (viewItem == schemaNode || viewItem == tableGroupNode)",
+          "group": "0_copy@3"
+        },
+        {
+          "command": "dbClient.copyDatabaseDdl",
+          "when": "view == database-client-explorer && viewItem == databaseNode",
+          "group": "0_copy@2"
+        },
+        {
+          "command": "dbClient.copyScriptDdl",
+          "when": "view == database-client-explorer && viewItem == scriptNode",
+          "group": "0_copy@2"
+        },
         {
           "command": "dbClient.bindQueryFolder",
           "when": "view == database-client-explorer && viewItem == queryGroupNode",
